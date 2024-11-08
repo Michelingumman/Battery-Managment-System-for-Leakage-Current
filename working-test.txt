@@ -1,0 +1,228 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "image_data.h"
+#include <SPI.h>
+#include <SdFat.h>
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define LEFT 1
+#define RIGHT 0
+
+#define INPUT_PIN 32
+// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+// The pins for I2C are defined by the Wire-library. 
+// On Wemos Lolin32 GPIO21(SDA), GPI022(SCL)
+
+// Change this to the actual pin used for chip select
+
+
+#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+
+/// @brief ////////FUNCTION DECLARATION /////////////
+void interface(float amps, int dir);
+void move_arrow(int dir, float amps);
+/// @brief //////////////////////////////////////////
+
+void setup() {
+
+  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  // // Uncomment to use display
+  // if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+  //   Serial.println(F("SSD1306 allocation failed"));
+  //   for(;;); // Don't proceed, loop forever
+  // } else {
+  //   Serial.println("SSD1306 allocation success");
+  // }
+
+  // // Clear the buffer
+  // display.clearDisplay();
+
+  // set analog pin GPIO4 to input to read
+  //pinMode(INPUT, INPUT);
+
+
+// Ported to SdFat from the native Arduino SD library example by Bill Greiman
+// On the Ethernet Shield, CS is pin 4. SdFat handles setting SS
+const int chipSelect = 5;
+/*
+ SD card read/write
+  
+ This example shows how to read and write data to and from an SD card file 	
+ The circuit:
+ * SD card attached to SPI bus as follows:
+ ** MOSI - pin 11
+ ** MISO - pin 12
+ ** CLK - pin 13
+ ** CS - pin 4
+ 
+ created   Nov 2010
+ by David A. Mellis
+ updated 2 Dec 2010
+ by Tom Igoe
+ modified by Bill Greiman 11 Apr 2011
+ This example code is in the public domain.
+ 	 
+ */
+SdFat sd;
+SdFile myFile;
+
+
+  Serial.begin(9600);
+  while (!Serial) {}  // wait for Leonardo
+  Serial.println("Type any character to start");
+  while (Serial.read() <= 0) {}
+  delay(400);  // catch Due reset problem
+  
+  // Initialize SdFat or print a detailed error message and halt
+  // Use half speed like the native library.
+  // change to SPI_FULL_SPEED for more performance.
+  if (!sd.begin(chipSelect, SPI_HALF_SPEED)) sd.initErrorHalt();
+
+  // open the file for write at end like the Native SD library
+  if (!myFile.open("test.txt", O_RDWR | O_CREAT | O_AT_END)) {
+    sd.errorHalt("opening test.txt for write failed");
+  }
+  // if the file opened okay, write to it:
+  Serial.print("Writing to test.txt...");
+  myFile.println("testing 1, 2, 3.");
+
+  // close the file:
+  myFile.close();
+  Serial.println("done.");
+
+  // re-open the file for reading:
+  if (!myFile.open("test.txt", O_READ)) {
+    sd.errorHalt("opening test.txt for read failed");
+  }
+  Serial.println("test.txt:");
+
+  // read from the file until there's nothing else in it:
+  int data;
+  while ((data = myFile.read()) >= 0) Serial.write(data);
+  // close the file:
+  myFile.close();
+}
+
+
+//  // Code for SD card
+//  // Initialize SD card
+//   if (!SD.begin(5)) {
+//     Serial.println("SD card initialization failed!");
+//     return;
+//   }
+//   Serial.println("SD card initialized successfully!");
+
+
+
+float current = 0.0;
+int direction = RIGHT;
+int direction_before = LEFT;
+int direct_log = 0;
+
+void loop() {
+
+  // Uncomment to use with display
+  // code for SD card reading and writing
+ 
+  // File32 file = SD.open("data-logger.txt", FILE_WRITE);
+  // if (file) {
+  //   file.println("OMG, det fungerade");
+  //   file.close();
+  //   Serial.println("Det borde funkat");
+  // } else {
+  //   for(;;);
+  // }
+
+
+  // // Uncomment to use with display
+    // current = analogRead(INPUT_PIN);
+    // direct_log = analogRead(INPUT_PIN);
+    // Serial.println(direct_log);
+
+    // current = ((current * 200)/4096) - 12;
+    // // this means that the voltage is negative
+    // if(current < 0) direction = RIGHT;   // which means that the direction of current is charging the battery
+    
+    // else if(current >= 0) direction = LEFT; // which means that the direction of current is discharging the battery
+
+    
+    // //Serial.println(direction)
+    // //Serial.println(current);
+
+
+    // interface(current, direction);
+
+    // // Serial.println(current)
+}
+
+
+
+void interface(float amps, int dir){
+  //dir is either LEFT or RI
+  display.clearDisplay();
+  display.drawLine(41, 46, 45, 46, WHITE);
+  display.drawLine(65, 46, 69, 46, WHITE);
+  display.drawLine(71, 46, 75, 46, WHITE);
+  display.drawLine(59, 46, 63, 46, WHITE);
+  display.drawLine(53, 46, 57, 46, WHITE);
+  display.drawLine(47, 46, 51, 46, WHITE);
+  display.drawBitmap(79, 16, image_volvo_bits, 50, 50, WHITE);
+  display.drawBitmap(78, 30, image_Layer_18_bits, 51, 17, WHITE);
+  display.drawBitmap(0, 31, image_battery__2__bits, 40, 30, WHITE);
+  move_arrow(dir, amps);
+  display.display();
+}
+
+
+// function that moves the arrow either right or left showing the current direction
+// this function below should be able to be run in the background of the code
+void move_arrow(int dir, float amps){
+  int x = 38;
+  int x_slut = 69;
+
+  if(dir == RIGHT){
+  x = 38;
+    display.setTextColor(WHITE);
+    display.setTextSize(1);
+    display.setCursor(3, 6);
+    display.setTextWrap(false);
+    display.print("Discharging:");
+    display.print(amps);
+    display.print(" A");
+    for(int i = 0; i < 31; i++){
+      display.drawBitmap(x, 37, image_Pin_arrow_right_9x7_bits, 9, 7, WHITE);
+      display.display();
+      delay(10);
+      display.drawBitmap(x, 37, image_Pin_arrow_right_9x7_bits, 9, 7, BLACK);
+      x++;
+      if(x==x_slut) x = 38;
+    }
+  }
+
+  else if(dir == LEFT){
+  x = x_slut;
+    display.setTextColor(WHITE);
+    display.setTextSize(1);
+    display.setCursor(3, 6);
+    display.setTextWrap(false);
+    display.print("Charging:");
+    display.print(amps);
+    display.print(" A");
+    for(int i = 0; i < 31; i++){
+      display.drawBitmap(x, 37, image_Pin_arrow_left_9x7_bits, 9, 7, WHITE);
+      display.display();
+      delay(10);
+      display.drawBitmap(x, 37, image_Pin_arrow_left_9x7_bits, 9, 7, BLACK);
+      x--;
+      if(x==38) x = x_slut;
+    }
+  }
+}
+
+
