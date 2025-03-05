@@ -153,46 +153,106 @@ def find_latest_file(directory="files"):
     """
     Finds the file with the latest date in the given directory.
     Files must have a name in the format YYYY-MM-DD.txt.
+    Returns None if no valid files found or directory doesn't exist.
     """
-    date_files = []
-    for f in os.listdir(directory):
-        match = re.match(r'(\d{4}-\d{2}-\d{2})\.txt$', f)
-        if match:
-            date_str = match.group(1)
-            try:
-                file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-                date_files.append((file_date, f))
-            except ValueError:
-                continue
-    if not date_files:
+    try:
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+            print(f"Created directory: {directory}")
+            return None
+            
+        date_files = []
+        for f in os.listdir(directory):
+            match = re.match(r'(\d{4}-\d{2}-\d{2})\.txt$', f)
+            if match:
+                date_str = match.group(1)
+                try:
+                    file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                    date_files.append((file_date, f))
+                except ValueError:
+                    continue
+        if not date_files:
+            return None
+        latest_file = max(date_files, key=lambda x: x[0])
+        return os.path.join(directory, latest_file[1]), latest_file[0]
+    except Exception as e:
+        print(f"Error finding latest file: {e}")
         return None
-    latest_file = max(date_files, key=lambda x: x[0])
-    return os.path.join(directory, latest_file[1]), latest_file[0]
+
+
+def generate_sample_data(plot_date):
+    """
+    Generates sample data for the given date.
+    Returns timestamps, voltages, and currents.
+    """
+    print(f"Generating sample data for: {plot_date}")
+    
+    # Create timestamps for a full day, one sample every 15 minutes
+    base_time = datetime.datetime.combine(plot_date, datetime.time(0, 0))
+    timestamps = [base_time + datetime.timedelta(minutes=15*i) for i in range(96)]  # 24h * 4 samples/hour
+    
+    # Generate sample voltage data (around 12V with day/night cycle)
+    hour_angles = np.array([(t.hour + t.minute/60) * 15 for t in timestamps])  # Convert hours to degrees
+    voltages = [12.5 + 0.5 * np.sin(np.radians(h)) for h in hour_angles]
+    
+    # Generate sample current data with charging during day, discharging at night
+    currents = []
+    for t in timestamps:
+        hour = t.hour + t.minute/60
+        if 6 <= hour < 18:  # Daytime (6 AM to 6 PM)
+            # Charging (negative current in range -2 to -0.5)
+            currents.append(-1.5 + 0.5 * np.sin(np.radians(hour * 30)))
+        else:  # Nighttime
+            # Discharging (positive current in range 0.3 to 1.2)
+            currents.append(0.75 + 0.45 * np.sin(np.radians(hour * 30)))
+    
+    return timestamps, voltages, currents
 
 
 def main():
     directory = "files"
+    
+    # Ensure directory exists
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        print(f"Created directory: {directory}")
+    
     # Check if a date argument was provided
     if len(sys.argv) > 1:
         try:
             plot_date = datetime.datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
             file_name = os.path.join(directory, f"{plot_date.strftime('%Y-%m-%d')}.txt")
-            if not os.path.exists(file_name):
-                print(f"File for date {plot_date} does not exist in {directory}.")
-                return
+            
+            if os.path.exists(file_name):
+                print(f"Using data file: {file_name}")
+                timestamps, voltages, currents = read_file(file_name)
+            else:
+                print(f"File for date {plot_date} does not exist. Using sample data instead.")
+                timestamps, voltages, currents = generate_sample_data(plot_date)
         except ValueError:
-            print("Invalid date format. Please use YYYY-MM-DD.")
-            return
+            print("Invalid date format. Please use YYYY-MM-DD. Using latest file or sample data.")
+            result = find_latest_file(directory)
+            if result is None:
+                # No valid files found, use current date
+                plot_date = datetime.datetime.now().date()
+                timestamps, voltages, currents = generate_sample_data(plot_date)
+            else:
+                file_name, plot_date = result
+                print(f"Using latest data file: {file_name}")
+                timestamps, voltages, currents = read_file(file_name)
     else:
         # No argument provided; find the latest file
         result = find_latest_file(directory)
         if result is None:
-            print("No valid data files found in the directory.")
-            return
-        file_name, plot_date = result
+            # No valid files found, use current date
+            plot_date = datetime.datetime.now().date()
+            timestamps, voltages, currents = generate_sample_data(plot_date)
+        else:
+            file_name, plot_date = result
+            print(f"Using latest data file: {file_name}")
+            timestamps, voltages, currents = read_file(file_name)
 
     print(f"Plotting data for: {plot_date}")
-    timestamps, voltages, currents = read_file(file_name)
     
     # Create time in seconds for calculations
     x_seconds = np.array([(t - timestamps[0]).total_seconds() for t in timestamps])
