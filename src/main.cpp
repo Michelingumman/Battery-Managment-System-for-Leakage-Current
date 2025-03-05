@@ -159,7 +159,13 @@ void setup() {
   }
   //gets the time when compiled
   rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
- 
+  DateTime time = rtc.now();
+  Serial.print("Time right now --> ");
+  Serial.print(time.hour());
+  Serial.print(":");
+  Serial.print(time.minute());
+  Serial.print(":");
+  Serial.println(time.second());
 
 
   // SD card setup
