@@ -355,7 +355,7 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
     plt.subplots_adjust(right=0.85, bottom=0.15)
     
     # Save the figure
-    save_dir = "plots"
+    save_dir = "visualization/plots"
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     
