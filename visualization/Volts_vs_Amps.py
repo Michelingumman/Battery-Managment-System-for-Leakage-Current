@@ -75,27 +75,96 @@ def find_date_directories(base_dir="visualization/files"):
 
 def load_data_from_directory(dir_path, reference_date):
     """
-    Loads voltage and current data from Amps.txt and Volts.txt in the specified directory.
+    Loads voltage and current data from "Amps YYYY-MM-DD.txt" and "Volts YYYY-MM-DD.txt" in the specified directory.
     Applies the reference date to timestamps for plotting.
     """
-    amps_file = os.path.join(dir_path, "Amps.txt")
-    volts_file = os.path.join(dir_path, "Volts.txt")
+    date_str = reference_date.strftime("%Y-%m-%d")
     
-    if not os.path.exists(amps_file):
-        raise FileNotFoundError(f"Current data file not found: {amps_file}")
+    # Check for Amps file in the directory
+    amps_file = os.path.join(dir_path, f"Amps {date_str}.txt")
+    amps_found = os.path.exists(amps_file)
     
-    if not os.path.exists(volts_file):
-        raise FileNotFoundError(f"Voltage data file not found: {volts_file}")
+    if not amps_found:
+        fallback_amps = os.path.join(dir_path, "Amps.txt")
+        if os.path.exists(fallback_amps):
+            print(f"Using fallback file: {fallback_amps}")
+            amps_file = fallback_amps
+            amps_found = True
+        else:
+            # Try to find in parent directory
+            parent_dir = os.path.dirname(dir_path)
+            parent_amps = os.path.join(parent_dir, f"Amps {date_str}.txt")
+            if os.path.exists(parent_amps):
+                print(f"Using file from parent directory: {parent_amps}")
+                amps_file = parent_amps
+                amps_found = True
     
-    # Read current data
-    amps_timestamps, amps_values = read_data_file(amps_file)
+    # Check for Volts file in the directory
+    volts_file = os.path.join(dir_path, f"Volts {date_str}.txt")
+    volts_found = os.path.exists(volts_file)
     
-    # Read voltage data
-    volts_timestamps, volts_values = read_data_file(volts_file)
+    if not volts_found:
+        fallback_volts = os.path.join(dir_path, "Volts.txt")
+        if os.path.exists(fallback_volts):
+            print(f"Using fallback file: {fallback_volts}")
+            volts_file = fallback_volts
+            volts_found = True
+        else:
+            # Try to find in parent directory
+            parent_dir = os.path.dirname(dir_path)
+            parent_volts = os.path.join(parent_dir, f"Volts {date_str}.txt")
+            if os.path.exists(parent_volts):
+                print(f"Using file from parent directory: {parent_volts}")
+                volts_file = parent_volts
+                volts_found = True
     
-    # Align the data based on timestamps
-    timestamps, voltages, currents = align_data(amps_timestamps, amps_values, 
-                                               volts_timestamps, volts_values)
+    # Check if at least one file type was found
+    if not amps_found and not volts_found:
+        raise FileNotFoundError(f"No data files found for date {date_str} in directory {dir_path} or parent directory")
+    
+    # Handle case where only one type of file is found
+    timestamps = None
+    voltages = []
+    currents = []
+    
+    # Load amps data if available
+    if amps_found:
+        print(f"Loading current data from: {amps_file}")
+        amps_timestamps, amps_values = read_data_file(amps_file)
+        if timestamps is None:
+            timestamps = amps_timestamps
+        currents = amps_values
+    else:
+        print(f"Warning: No current data file found for date {date_str}")
+        amps_timestamps = []
+        amps_values = []
+    
+    # Load volts data if available
+    if volts_found:
+        print(f"Loading voltage data from: {volts_file}")
+        volts_timestamps, volts_values = read_data_file(volts_file)
+        if timestamps is None:
+            timestamps = volts_timestamps
+        voltages = volts_values
+    else:
+        print(f"Warning: No voltage data file found for date {date_str}")
+        volts_timestamps = []
+        volts_values = []
+    
+    # If both files are present, align the data
+    if amps_found and volts_found:
+        timestamps, voltages, currents = align_data(amps_timestamps, amps_values, 
+                                                  volts_timestamps, volts_values)
+    elif amps_found:
+        # Only amps data available
+        timestamps = amps_timestamps
+        currents = amps_values
+        voltages = [0] * len(timestamps)  # Placeholder zeros for missing voltage data
+    elif volts_found:
+        # Only volts data available
+        timestamps = volts_timestamps
+        voltages = volts_values
+        currents = [0] * len(timestamps)  # Placeholder zeros for missing current data
     
     # Apply reference date to timestamps
     dated_timestamps = []
@@ -110,9 +179,19 @@ def load_data_from_directory(dir_path, reference_date):
 def align_data(amps_timestamps, amps_values, volts_timestamps, volts_values):
     """
     Aligns current and voltage data based on timestamps.
-    Returns synchronized timestamps, voltages, and currents.
+    Returns common timestamps and corresponding values.
+    Handles cases where one of the data arrays might be empty.
     """
-    # Create a mapping of timestamps to values
+    # Handle special cases where one dataset might be empty
+    if not amps_timestamps or not amps_values:
+        print("Warning: No current data available for alignment")
+        return volts_timestamps, volts_values, [0] * len(volts_values)
+    
+    if not volts_timestamps or not volts_values:
+        print("Warning: No voltage data available for alignment")
+        return amps_timestamps, [0] * len(amps_values), amps_values
+    
+    # Create mappings of timestamp to value for easy lookup
     amps_map = {}
     for i, ts in enumerate(amps_timestamps):
         if i < len(amps_values):
@@ -185,62 +264,88 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
     ax1.xaxis.set_major_formatter(formatter)
     ax1.xaxis.set_major_locator(mdates.HourLocator())
     
-    # Plot 1: Current over time (primary y-axis)
+    # Check if we have current data (not all zeros)
+    has_current_data = any(abs(current) > 0.001 for current in currents)
+    
+    # Plot 1: Current over time (primary y-axis) if data exists
     color_current = 'black'
     ax1.set_xlabel(f"Time on {plot_date.strftime('%Y-%m-%d')}")
     ax1.set_ylabel("Current [A]", color=color_current)
-    ax1.plot(timestamps, currents, color=color_current, linewidth=2.5, label='Current [A]')
     
-    # Fill between to highlight charging/discharging areas
-    ax1.fill_between(timestamps, currents, 0, where=(np.array(currents) >= 0), 
-                  interpolate=True, color='blue', alpha=0.15, label='Charging')
-    ax1.fill_between(timestamps, currents, 0, where=(np.array(currents) < 0), 
-                  interpolate=True, color='red', alpha=0.15, label='Discharging')
+    if has_current_data:
+        ax1.plot(timestamps, currents, color=color_current, linewidth=2.5, label='Current [A]')
+        
+        # Fill between to highlight charging/discharging areas
+        ax1.fill_between(timestamps, currents, 0, where=(np.array(currents) >= 0), 
+                      interpolate=True, color='blue', alpha=0.15, label='Charging')
+        ax1.fill_between(timestamps, currents, 0, where=(np.array(currents) < 0), 
+                      interpolate=True, color='red', alpha=0.15, label='Discharging')
+    else:
+        print("Warning: No current data to plot")
     
-    # Add a horizontal line at 0 for reference
-    ax1.axhline(0, color='gray', linestyle='--', linewidth=1)
-    ax1.tick_params(axis='y', labelcolor=color_current)
+    # Check if we have voltage data (not all zeros)
+    has_voltage_data = any(abs(voltage) > 0.001 for voltage in voltages)
     
-    # Create second y-axis for voltage
+    # Create second y-axis and plot voltage
     ax2 = ax1.twinx()
-    color_voltage = 'darkgreen'
+    color_voltage = 'green'
     ax2.set_ylabel("Voltage [V]", color=color_voltage)
-    ax2.plot(timestamps, voltages, color=color_voltage, linewidth=2.5, label='Voltage [V]')
-    ax2.tick_params(axis='y', labelcolor=color_voltage)
     
-    # Create third y-axis for capacity (by offsetting the second axis)
-    ax3 = ax1.twinx()
-    # Move the third axis to the right
-    ax3.spines["right"].set_position(("axes", 1.15))
-    color_capacity = 'purple'
-    ax3.set_ylabel("Capacity [Ah]", color=color_capacity)
-    ax3.plot(timestamps, capacity_values, color=color_capacity, linestyle='--', linewidth=2.5, label='Capacity [Ah]')
-    ax3.tick_params(axis='y', labelcolor=color_capacity)
+    if has_voltage_data:
+        ax2.plot(timestamps, voltages, color=color_voltage, linewidth=2.5, label='Voltage [V]')
+    else:
+        print("Warning: No voltage data to plot")
     
-    # Add grid (but only for the main axis)
-    ax1.grid(True, alpha=0.3)
+    # Create third y-axis and plot capacity
+    # Only proceed if we have current data to calculate capacity
+    if has_current_data:
+        # Offset third y-axis to the right
+        ax3 = ax1.twinx()
+        ax3.spines["right"].set_position(("axes", 1.15))
+        
+        color_capacity = 'red'
+        ax3.set_ylabel("Capacity [Ah]", color=color_capacity)
+        ax3.plot(timestamps, capacity_values, color=color_capacity, linewidth=2.5, label='Capacity [Ah]')
+        
+        # Set the y-limit for capacity to start from 0
+        ax3.set_ylim(0, max(capacity_values) * 1.1 if max(capacity_values) > 0 else 1)
     
-    # Create a combined legend
+    # Create combined legend
     lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    lines3, labels3 = ax3.get_legend_handles_labels()
     
-    # Filter out the fill_between labels to avoid duplication
-    filtered_lines1 = [lines1[0]]  # Only keep the first line (Current)
-    filtered_labels1 = [labels1[0]]
+    if has_voltage_data:
+        lines2, labels2 = ax2.get_legend_handles_labels()
+    else:
+        lines2, labels2 = [], []
     
-    ax1.legend(filtered_lines1 + lines2 + lines3, filtered_labels1 + labels2 + labels3, 
-              loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=3, frameon=True)
+    if has_current_data:
+        lines3, labels3 = ax3.get_legend_handles_labels() if 'ax3' in locals() else ([], [])
+    else:
+        lines3, labels3 = [], []
     
-    # Add time range annotation
-    time_range_text = f"Time Range: {timestamps[0].strftime('%H:%M:%S')} to {timestamps[-1].strftime('%H:%M:%S')}"
-    plt.figtext(0.5, 0.01, time_range_text, ha='center', fontsize=10)
+    # Combine only non-empty legend elements
+    all_lines = []
+    all_labels = []
     
-    # Add charging/discharging legend separately
-    charge_patch = plt.Rectangle((0, 0), 1, 1, color='red', alpha=0.15)
-    discharge_patch = plt.Rectangle((0, 0), 1, 1, color='blue', alpha=0.15)
-    plt.legend([charge_patch, discharge_patch], ['Discharging', 'Charging'], 
-              loc='upper right', framealpha=0.7)
+    if lines1:
+        all_lines.extend(lines1)
+        all_labels.extend(labels1)
+    
+    if lines2:
+        all_lines.extend(lines2)
+        all_labels.extend(labels2)
+    
+    if lines3:
+        all_lines.extend(lines3)
+        all_labels.extend(labels3)
+    
+    # Only create a legend if we have items for it
+    if all_lines:
+        ax1.legend(all_lines, all_labels, loc='upper center', bbox_to_anchor=(0.5, -0.15), 
+                ncol=3, fancybox=True, shadow=True)
+    
+    # Add grid
+    ax1.grid(True, linestyle='--', alpha=0.7)
     
     # Rotate x-axis labels for better readability
     plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
