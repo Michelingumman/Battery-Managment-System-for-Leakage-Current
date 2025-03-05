@@ -257,18 +257,19 @@ void loop() {
 
 float get_adc_data_in_A(){
   int16_t results;
-  double multiplier = 0.0078125; /* ADS1115  @ +/- 6.144V gain (16-bit results) */
+  double Ampmultiplier = 0.0078125; /* ADS1115  @ +/- 6.144V gain (16-bit results) */
   results = ads.readADC_Differential_0_1();
-  float temp = float((results * multiplier * (SHUNT_SIZE / 75.000)));
-  return temp;
+  float amps = float((results * Ampmultiplier * (SHUNT_SIZE / 75.000)));
+  return amps;
 }
 
 
 float get_adc_data_in_V(){
   int16_t results;
+  double Voltmultiplier = 0.0002696; /* ADS1115  @ +/- 6.144V gain (16-bit results) */
   results = ads.readADC_SingleEnded(2);
-  int volts = 0.0002696 * results; //in volts since one step was 0.2696mV / step
-  return (float)volts;
+  float volts = float(2 * Voltmultiplier * results); //in volts since one step was 0.2696mV / step
+  return volts;
 }
 
 
