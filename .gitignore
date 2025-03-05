@@ -4,3 +4,5 @@
 .vscode/launch.json
 .vscode/ipch
 rapport/other
+
+secrets.h
