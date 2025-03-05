@@ -354,15 +354,23 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
     plt.tight_layout()
     plt.subplots_adjust(right=0.85, bottom=0.15)
     
-    # Save the figure
-    save_dir = "visualization/plots"
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    
-    fig.savefig(os.path.join(save_dir, f"battery_data_{plot_date.strftime('%Y-%m-%d')}.png"), dpi=300)
-    
-    # Show the figure
+    # Show the figure first
     plt.show()
+    
+    # Ask user if they want to save the figure
+    save_response = input(f"Save plot to file? (y/n): ").strip().lower()
+    
+    if save_response == 'y' or save_response == 'yes':
+        save_dir = "visualization/plots"
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        
+        filename = os.path.join(save_dir, f"battery_data_{plot_date.strftime('%Y-%m-%d')}.png")
+        fig.savefig(filename, dpi=300)
+        print(f"Plot saved to: {filename}")
+    else:
+        print("Plot not saved.")
+    
     plt.close(fig)
 
 
