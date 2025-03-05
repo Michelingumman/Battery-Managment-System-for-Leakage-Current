@@ -176,11 +176,11 @@ void setup() {
   if (!sd.begin(chipSelect, SPI_HALF_SPEED)) sd.initErrorHalt();
 
   Serial.println("Jag är här");
-  Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASS); // initialize blynk instance elr nått vne riktigt heeh
-  timer.setInterval(500L, myTimer); //data will bne sebt
+  // Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASS); // initialize blynk instance elr nått vne riktigt heeh
+  // timer.setInterval(500L, myTimer); //data will bne sebt
 
   Serial.println("Jag är här2");
-  gpioViewer.begin();
+  // gpioViewer.begin();
 }
 
 
@@ -204,8 +204,8 @@ void loop() {
   DateTime now = rtc.now(); // Hämta aktuell tid
   while(count < 60){
     // Serial.println("Running Blynk");
-    Blynk.run();
-    timer.run(); // run blynktimer set to 500ms
+    // Blynk.run();
+    // timer.run(); // run blynktimer set to 500ms
     // Blynk.virtualWrite(V1, "Hello from ESP32");
     
     float data_in_amps = get_adc_data_in_A();
