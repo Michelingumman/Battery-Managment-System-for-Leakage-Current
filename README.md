@@ -1,6 +1,10 @@
 # Battery Management System for Leakage Current
+![image](https://github.com/user-attachments/assets/bb96bbee-dab2-4f67-a350-726b1b63d7a1)
 
 A comprehensive system for monitoring, analyzing, and visualizing battery charging and discharging patterns, with a focus on leakage current measurement.
+
+![image](https://github.com/user-attachments/assets/3e27d749-df2c-4710-be02-5afdb6bcb3d6)
+![image](https://github.com/user-attachments/assets/0eef07d9-9b81-4e27-b7ef-9badf6db41ec)
 
 ## Overview
 
