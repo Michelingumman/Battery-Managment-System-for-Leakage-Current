@@ -17,12 +17,6 @@ This project provides tools to collect, process, and visualize battery data, hel
   - Current (A) over time
   - Voltage (V) over time
   - Cumulative discharge capacity (Ah)
-  - Battery percentage remaining (based on 55Ah total capacity)
-- **Battery Analytics**: Calculates important metrics like:
-  - Cumulative capacity usage
-  - Battery percentage remaining
-  - Charging and discharging patterns
-- **Flexible Data Handling**: Works with various file formats and directory structures
 
 ## Data File Structure
 
