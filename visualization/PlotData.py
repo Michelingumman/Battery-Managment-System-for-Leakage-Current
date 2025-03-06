@@ -398,11 +398,11 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
         ax3.spines["right"].set_position(("axes", 1.15))
         
         color_capacity = 'red'
-        ax3.set_ylabel("Discharge [Ah]", color=color_capacity)
+        ax3.set_ylabel("Capacity [Ah]", color=color_capacity)
         
         # Plot with markers to show individual data points
         ax3.plot(timestamps, capacity_values, color=color_capacity, linewidth=2.0, 
-               marker='.', markersize=3, label='Discharge [Ah]')
+               marker='.', markersize=3, label='Capacity [Ah]')
         
         # Set the y-limit for capacity to start from 0
         max_capacity = max(capacity_values) if max(capacity_values) > 0 else 1
