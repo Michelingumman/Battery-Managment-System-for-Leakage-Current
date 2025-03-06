@@ -46,7 +46,7 @@ def read_data_file(file_path):
     return timestamps, values
 
 
-def find_date_directories(base_dir="visualization/files"):
+def find_date_directories(base_dir="visualization/data"):
     """
     Finds all date directories in the format YYYY-MM-DD.
     Returns a list of (date, directory_path) tuples sorted by date.
@@ -256,13 +256,47 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
     All metrics share the same x-axis but have their own y-axes.
     """
     # Create figure and primary axis
-    fig, ax1 = plt.subplots(figsize=(12, 8))
+    fig, ax1 = plt.subplots(figsize=(15, 8))
     fig.suptitle(f"Battery Data Analysis - {plot_date.strftime('%Y-%m-%d')}", fontsize=16)
     
-    # Format x-axis to show date and time
-    formatter = mdates.DateFormatter('%H:%M')
-    ax1.xaxis.set_major_formatter(formatter)
-    ax1.xaxis.set_major_locator(mdates.HourLocator())
+    # Get time range for proper formatting
+    if timestamps:
+        min_time = min(timestamps)
+        max_time = max(timestamps)
+        total_seconds = (max_time - min_time).total_seconds()
+        hours_span = total_seconds / 3600
+    else:
+        hours_span = 1  # Default if no data
+    
+    # Choose appropriate time formatting based on data span
+    if hours_span < 1:
+        # For less than an hour of data, show minute:second
+        major_formatter = mdates.DateFormatter('%H:%M')
+        major_locator = mdates.MinuteLocator(byminute=range(0, 60, 5))  # Every 5 minutes
+        minor_locator = mdates.MinuteLocator(byminute=range(0, 60, 1))  # Every minute
+    elif hours_span < 6:
+        # For 1-6 hours, show hour:minute with 15-minute ticks
+        major_formatter = mdates.DateFormatter('%H:%M')
+        major_locator = mdates.MinuteLocator(byminute=range(0, 60, 15))  # Every 15 minutes
+        minor_locator = mdates.MinuteLocator(byminute=range(0, 60, 5))   # Every 5 minutes
+    else:
+        # For longer periods, show hour with hourly ticks
+        major_formatter = mdates.DateFormatter('%H:%M')
+        major_locator = mdates.HourLocator()
+        minor_locator = mdates.MinuteLocator(byminute=[0, 30])  # Every 30 minutes
+    
+    # Apply the formatting to the x-axis
+    ax1.xaxis.set_major_formatter(major_formatter)
+    ax1.xaxis.set_major_locator(major_locator)
+    ax1.xaxis.set_minor_locator(minor_locator)
+    
+    # Make sure we show grid lines for easier reading
+    ax1.grid(True, which='major', linestyle='-', alpha=0.7)
+    ax1.grid(True, which='minor', linestyle=':', alpha=0.4)
+    
+    # Ensure all data points are plotted by setting the limit to actual data range
+    if timestamps:
+        ax1.set_xlim(min_time, max_time)
     
     # Check if we have current data (not all zeros)
     has_current_data = any(abs(current) > 0.001 for current in currents)
@@ -273,7 +307,9 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
     ax1.set_ylabel("Current [A]", color=color_current)
     
     if has_current_data:
-        ax1.plot(timestamps, currents, color=color_current, linewidth=2.5, label='Current [A]')
+        # Plot every data point with markers
+        ax1.plot(timestamps, currents, color=color_current, linewidth=2.0, marker='.', 
+               markersize=3, label='Current [A]')
         
         # Fill between to highlight charging/discharging areas
         ax1.fill_between(timestamps, currents, 0, where=(np.array(currents) >= 0), 
@@ -292,7 +328,9 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
     ax2.set_ylabel("Voltage [V]", color=color_voltage)
     
     if has_voltage_data:
-        ax2.plot(timestamps, voltages, color=color_voltage, linewidth=2.5, label='Voltage [V]')
+        # Plot with markers to show individual data points
+        ax2.plot(timestamps, voltages, color=color_voltage, linewidth=2.0, 
+               marker='.', markersize=3, label='Voltage [V]')
     else:
         print("Warning: No voltage data to plot")
     
@@ -304,11 +342,15 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
         ax3.spines["right"].set_position(("axes", 1.15))
         
         color_capacity = 'red'
-        ax3.set_ylabel("Capacity [Ah]", color=color_capacity)
-        ax3.plot(timestamps, capacity_values, color=color_capacity, linewidth=2.5, label='Capacity [Ah]')
+        ax3.set_ylabel("Discharge [Ah]", color=color_capacity)
+        
+        # Plot with markers to show individual data points
+        ax3.plot(timestamps, capacity_values, color=color_capacity, linewidth=2.0, 
+               marker='.', markersize=3, label='Discharge [Ah]')
         
         # Set the y-limit for capacity to start from 0
-        ax3.set_ylim(0, max(capacity_values) * 1.1 if max(capacity_values) > 0 else 1)
+        max_capacity = max(capacity_values) if max(capacity_values) > 0 else 1
+        ax3.set_ylim(0, max_capacity * 1.1)
     
     # Create combined legend
     lines1, labels1 = ax1.get_legend_handles_labels()
@@ -347,12 +389,26 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
     # Add grid
     ax1.grid(True, linestyle='--', alpha=0.7)
     
-    # Rotate x-axis labels for better readability
+    # Rotate x-axis labels for better readability and adjust spacing
     plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
     
-    # Improve layout
+    # Add time range annotation at the bottom
+    if timestamps:
+        start_time = min(timestamps).strftime('%H:%M:%S')
+        end_time = max(timestamps).strftime('%H:%M:%S')
+        time_range_text = f"Time Range: {start_time} to {end_time}"
+        fig.text(0.5, 0.01, time_range_text, ha='center', fontsize=10)
+    
+    # Make sure the minor ticks are also visible with proper formatting
+    ax1.tick_params(which='minor', length=4, color='k', width=1.0)
+    ax1.tick_params(which='major', length=7, color='k', width=1.5)
+    
+    # Add timestamp markers and make sure tick labels don't overlap
+    fig.autofmt_xdate()
+    
+    # Improve layout with extra space for x-axis labels
     plt.tight_layout()
-    plt.subplots_adjust(right=0.85, bottom=0.15)
+    plt.subplots_adjust(right=0.85, bottom=0.2)
     
     # Show the figure first
     plt.show()
@@ -375,7 +431,7 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
 
 
 def main():
-    base_dir = "visualization/files"
+    base_dir = "visualization/data"
     
     # Check if files directory exists
     if not os.path.exists(base_dir):
