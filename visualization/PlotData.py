@@ -9,36 +9,76 @@ import numpy as np
 
 def read_data_file(file_path):
     """
-    Reads data from a file. Each line should contain a timestamp and comma-separated values,
-    separated by '-->'.
+    Reads data from a file where each line represents one minute of data.
+    
+    The file format is:
+    - First row may contain values without timestamp
+    - Subsequent rows have a timestamp (HH:MM:SS) followed by '-->'
+    - After the '-->' are comma-separated values, one for each second
+    
+    Returns two lists:
+    - timestamps: List of datetime objects with second-level precision
+    - values: List of corresponding measurement values
     """
     with open(file_path, 'r') as file:
         lines = file.readlines()
     
     timestamps = []
     values = []
+    current_minute = None
     
     for line in lines:
+        line = line.strip()
+        if not line:
+            continue  # Skip empty lines
+            
+        # Check if line has a timestamp marker
         if '-->' in line:
-            timestamp_part = line.split('-->')[0].strip()
-            numbers_part = line.split('-->')[-1]
+            parts = line.split('-->')
+            timestamp_str = parts[0].strip()
+            data_part = parts[1].strip()
             
-            # Parse timestamp (HH:MM:SS)
+            # Parse the timestamp (usually in HH:MM:SS format)
             try:
-                time_obj = datetime.datetime.strptime(timestamp_part, "%H:%M:%S")
+                # This gives us the minute marker
+                time_obj = datetime.datetime.strptime(timestamp_str, "%H:%M:%S")
+                current_minute = time_obj
             except ValueError:
-                # Try without seconds if that fails
-                time_obj = datetime.datetime.strptime(timestamp_part, "%H:%M")
-            
-            timestamps.append(time_obj)
-            
-            # Parse values - split by comma and convert to float
-            data_values = [float(x.strip()) for x in numbers_part.strip().split(',') if x.strip()]
-            
-            # If there are multiple values per timestamp, average them
-            if data_values:
-                avg_value = sum(data_values) / len(data_values)
-                values.append(avg_value)
+                try:
+                    # Try without seconds
+                    time_obj = datetime.datetime.strptime(timestamp_str, "%H:%M")
+                    current_minute = time_obj
+                except ValueError:
+                    print(f"Warning: Could not parse timestamp: {timestamp_str}")
+                    continue
+        else:
+            # Line without timestamp - use data directly
+            data_part = line
+        
+        # Parse the comma-separated values
+        second_values = []
+        for val in data_part.split(','):
+            val = val.strip()
+            if val:  # Skip empty values
+                try:
+                    second_values.append(float(val))
+                except ValueError:
+                    print(f"Warning: Could not parse value: {val}")
+        
+        # If we have a current minute and values, create timestamps for each second
+        if current_minute and second_values:
+            for second_idx, value in enumerate(second_values):
+                # Create a timestamp with the correct second
+                second_timestamp = current_minute.replace(second=second_idx % 60)
+                
+                # If we're about to overflow to the next minute (would have second >= 60),
+                # then increment the minute appropriately
+                if second_idx >= 60:
+                    extra_minutes = second_idx // 60
+                    second_timestamp += datetime.timedelta(minutes=extra_minutes)
+                
+                timestamps.append(second_timestamp)
+                values.append(value)
     
     if not timestamps:
         raise ValueError(f"No valid data found in file: {file_path}")
@@ -269,11 +309,16 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
         hours_span = 1  # Default if no data
     
     # Choose appropriate time formatting based on data span
-    if hours_span < 1:
+    if hours_span < 0.1:  # Less than 6 minutes of data
+        # For very short spans, show minute:second with second precision
+        major_formatter = mdates.DateFormatter('%H:%M:%S')
+        major_locator = mdates.SecondLocator(bysecond=range(0, 60, 10))  # Every 10 seconds
+        minor_locator = mdates.SecondLocator(bysecond=range(0, 60, 1))   # Every second
+    elif hours_span < 1:
         # For less than an hour of data, show minute:second
-        major_formatter = mdates.DateFormatter('%H:%M')
-        major_locator = mdates.MinuteLocator(byminute=range(0, 60, 5))  # Every 5 minutes
-        minor_locator = mdates.MinuteLocator(byminute=range(0, 60, 1))  # Every minute
+        major_formatter = mdates.DateFormatter('%H:%M:%S')
+        major_locator = mdates.MinuteLocator(byminute=range(0, 60, 1))   # Every minute
+        minor_locator = mdates.SecondLocator(bysecond=range(0, 60, 15))  # Every 15 seconds
     elif hours_span < 6:
         # For 1-6 hours, show hour:minute with 15-minute ticks
         major_formatter = mdates.DateFormatter('%H:%M')
@@ -297,6 +342,17 @@ def plot_combined_data(timestamps, voltages, currents, capacity_values, plot_dat
     # Ensure all data points are plotted by setting the limit to actual data range
     if timestamps:
         ax1.set_xlim(min_time, max_time)
+        
+        # Add interactive time information with tooltips for precise second values
+        def format_coord(x, y):
+            # Convert x (float date) to datetime
+            date_obj = mdates.num2date(x)
+            # Format with full precision including seconds
+            time_str = date_obj.strftime('%H:%M:%S')
+            # Return formatted coordinate string with both time and y-value
+            return f'Time: {time_str}, Value: {y:.2f}'
+            
+        ax1.format_coord = format_coord
     
     # Check if we have current data (not all zeros)
     has_current_data = any(abs(current) > 0.001 for current in currents)
@@ -478,6 +534,16 @@ def main():
     try:
         # Load data from the selected directory
         timestamps, voltages, currents = load_data_from_directory(selected_dir, selected_date)
+        
+        # Print debug info to verify second-level resolution
+        print(f"Loaded {len(timestamps)} data points")
+        print(f"First 5 timestamps:")
+        for i in range(min(5, len(timestamps))):
+            print(f"  {timestamps[i].strftime('%H:%M:%S')}: {currents[i]}")
+            
+        print(f"Last 5 timestamps:")
+        for i in range(max(0, len(timestamps)-5), len(timestamps)):
+            print(f"  {timestamps[i].strftime('%H:%M:%S')}: {currents[i]}")
         
         # Calculate cumulative capacity
         capacity_values = compute_cumulative_capacity(timestamps, currents)
