@@ -3,13 +3,14 @@
  * 
  * This ESP32-based system monitors battery voltage and current,
  * storing timestamped readings to SD card files for later analysis.
- * When parked and connected to WiFi, data is uploaded to an MQTT broker.
+ * When WiFi connection is available, data can be accessed remotely.
  * 
  * Features:
  * - High-precision ADC measurements for voltage and current
  * - RTC-synchronized timestamps
  * - SD card data logging
- * - MQTT data upload when parked and connected to WiFi
+ * - Web interface for accessing logged data files
+ * - MQTT data upload when connected to WiFi
  * - OTA updates via WiFi
  * 
  * Hardware:
@@ -34,9 +35,9 @@
 // Network libraries
 #include <WiFi.h>
 #include <WiFiClient.h>
-#include <ElegantOTA.h>     // OTA update functionality
+#include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-
+#include <ElegantOTA.h>     // OTA update functionality
 
 #if ENABLE_MQTT
 #include <PubSubClient.h>   // MQTT client
@@ -89,17 +90,16 @@ const char* mqtt_topic_prefix = "battery/data/";
 #endif
 
 // Timing settings
-const unsigned long WIFI_RETRY_INTERVAL = 30000;  // Try to reconnect WiFi every 30 seconds
-const unsigned long MQTT_UPLOAD_INTERVAL = 60000; // Check for data to upload every minute
-const float PARKED_CURRENT_THRESHOLD = 0.5;       // Current below this is considered "parked" (A)
-const int PARKED_CONFIRMATION_TIME = 300;         // Time (seconds) to confirm car is parked
+const unsigned long WIFI_RETRY_INTERVAL = 60000;  // Try to reconnect WiFi every minute
+const unsigned long MQTT_UPLOAD_INTERVAL = 120000; // Check for data to upload every 2 minutes
+const unsigned long WIFI_CONNECT_TIMEOUT = 10000; // 10 seconds timeout for WiFi connection
 
 // ===== OBJECT INITIALIZATION =====
 Adafruit_ADS1115 ads;       // 16-bit ADC object
 RTC_DS3231 rtc;             // Real-time clock object
 SdFat sd;                   // SD card filesystem
 SdFile file;                // File object for writing
-AsyncWebServer server(80);  // Web server for OTA updates
+AsyncWebServer server(80);  // Web server for OTA updates and file access
 
 #if ENABLE_MQTT
 WiFiClient espClient;       // WiFi client for MQTT
@@ -126,8 +126,6 @@ int i = 1;
 bool wifi_connected = false;
 unsigned long last_wifi_attempt = 0;
 unsigned long last_mqtt_upload = 0;
-bool is_parked = false;
-int parked_confirmation_counter = 0;
 String uploaded_files[50];  // Keep track of uploaded files
 int num_uploaded_files = 0;
 
@@ -143,16 +141,19 @@ float get_adc_data_in_V();    // Get voltage reading in Volts
 void write_file(float data, int count, String filename); // Log data to SD card
 
 // WiFi and MQTT functions
-#if ENABLE_MQTT
 void check_wifi_connection();            // Check and attempt to reconnect WiFi
+
+#if ENABLE_MQTT
 void connect_mqtt();                     // Connect to MQTT broker
 void check_and_upload_data();            // Upload stored data when connected
 bool upload_file_to_mqtt(String filepath); // Upload a specific file
 bool is_file_uploaded(String filepath);  // Check if file was already uploaded
 #endif
 
-// Parked state detection
-void check_parked_state(float current_reading);
+// Web server functions
+void setup_web_server();                 // Setup web server routes
+String list_files(String path);          // List all files in directory
+String get_file_size(String filename);   // Get file size as string
 
 // Display functions
 #if ENABLE_DISPLAY
@@ -201,67 +202,7 @@ void setup() {
   // Initialize WiFi connection
   WiFi.mode(WIFI_STA);
   WiFi.setHostname("VolvoESP32");  // Set custom device name
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  Serial.print("Connecting to WiFi");
-  // Try to connect for up to 10 seconds - if not connected, we'll try again later when parked
-  for (int i = 0; i < 20 && WiFi.status() != WL_CONNECTED; i++) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    wifi_connected = true;
-    Serial.println("");
-    Serial.print("Connected to WiFi: ");
-    Serial.println(WIFI_SSID);
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\nWiFi connection failed. Will retry when parked.");
-    WiFi.disconnect(true);
-    wifi_connected = false;
-  }
-
-  // Setup OTA update server (only works when WiFi is connected)
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/plain", "Battery Management System - OTA Update Server");
-  });
-
-  ElegantOTA.begin(&server);    // Start ElegantOTA
-  ElegantOTA.onStart(onOTAStart);
-  ElegantOTA.onProgress(onOTAProgress);
-  ElegantOTA.onEnd(onOTAEnd);
-
-  if (wifi_connected) {
-    server.begin();
-    Serial.println("HTTP server started");
-  }
-
-#if ENABLE_MQTT
-  // Setup MQTT client
-  mqtt.setServer(mqtt_server, mqtt_port);
-  if (wifi_connected) {
-    connect_mqtt();
-  }
-#endif
-
-#if ENABLE_DISPLAY
-  // Initialize OLED display
-  Serial.println("Initializing display...");
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println("ERROR: SSD1306 display initialization failed");
-  } else {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(WHITE);
-    display.setCursor(0, 0);
-    display.println("Battery Monitor");
-    display.println("Initializing...");
-    display.display();
-    Serial.println("Display initialized successfully");
-  }
-#endif
+  check_wifi_connection();         // Initial WiFi connection attempt
 
   // Initialize ADS1115 ADC
   Serial.println("Initializing ADC...");
@@ -271,6 +212,9 @@ void setup() {
 
   if (!ads.begin()) {
     Serial.println("ERROR: Failed to initialize ADS1115!");
+    while (1) {
+      delay(100); // Halt system if ADC initialization fails
+    }
   }
   Serial.println("ADC initialized successfully");
 
@@ -297,6 +241,34 @@ void setup() {
   }
   Serial.println("SD card initialized successfully");
 
+  // Setup web server for file browsing and OTA updates
+  setup_web_server();
+
+#if ENABLE_MQTT
+  // Setup MQTT client
+  mqtt.setServer(mqtt_server, mqtt_port);
+  if (wifi_connected) {
+    connect_mqtt();
+  }
+#endif
+
+#if ENABLE_DISPLAY
+  // Initialize OLED display
+  Serial.println("Initializing display...");
+  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println("ERROR: SSD1306 display initialization failed");
+  } else {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+    display.setCursor(0, 0);
+    display.println("Battery Monitor");
+    display.println("Initializing...");
+    display.display();
+    Serial.println("Display initialized successfully");
+  }
+#endif
+
   Serial.println("Setup complete!");
 }
 
@@ -310,35 +282,29 @@ void loop() {
   // Get current date/time
   DateTime now = rtc.now();
   
+  // Try to reconnect WiFi periodically if disconnected
+  if (millis() - last_wifi_attempt > WIFI_RETRY_INTERVAL) {
+    check_wifi_connection();
+  }
+  
+  // Check for MQTT upload if connected
+  #if ENABLE_MQTT
+  if (wifi_connected && mqtt.connected() && 
+      (millis() - last_mqtt_upload > MQTT_UPLOAD_INTERVAL)) {
+    check_and_upload_data();
+    last_mqtt_upload = millis();
+  }
+  #endif
+  
   // Collect and log data every minute (60 samples at ~1 second intervals)
   while (count < 60) {
     // Read voltage and current values
     float data_in_amps = get_adc_data_in_A();
     float data_in_volts = get_adc_data_in_V();
     
-    // Check if car is parked based on current reading
-    check_parked_state(data_in_amps);
-    
-    // If parked, check WiFi and MQTT connections
-    if (is_parked) {
-      #if ENABLE_MQTT
-      // Try to reconnect WiFi if needed
-      if (millis() - last_wifi_attempt > WIFI_RETRY_INTERVAL) {
-        check_wifi_connection();
-      }
-      
-      // Upload data if connected
-      if (wifi_connected && mqtt.connected() && 
-          (millis() - last_mqtt_upload > MQTT_UPLOAD_INTERVAL)) {
-        check_and_upload_data();
-        last_mqtt_upload = millis();
-      }
-      #endif
-    }
-    
     // Display readings on serial monitor
-    Serial.printf("Volts: %.2fV | Amps: %.2fA | Parked: %s\n", 
-                 data_in_volts, data_in_amps, is_parked ? "Yes" : "No");
+    Serial.printf("Volts: %.2fV | Amps: %.2fA | WiFi: %s\n", 
+                 data_in_volts, data_in_amps, wifi_connected ? "Connected" : "Disconnected");
     
     // Write data to SD card files
     // Files are named "Amps YYYY-MM-DD.txt" and "Volts YYYY-MM-DD.txt"
@@ -464,29 +430,6 @@ void write_file(float data, int count, String filnamn) {
 }
 
 /**
- * Check if the car is parked based on current readings
- * We define "parked" as current below a threshold for a certain period
- */
-void check_parked_state(float current_reading) {
-  // Check if current is below the threshold indicating car is not being driven
-  if (abs(current_reading) < PARKED_CURRENT_THRESHOLD) {
-    parked_confirmation_counter++;
-    if (parked_confirmation_counter >= PARKED_CONFIRMATION_TIME && !is_parked) {
-      is_parked = true;
-      Serial.println("Car is now PARKED. Will attempt data upload if WiFi available.");
-    }
-  } else {
-    // Reset counter if current goes above threshold
-    parked_confirmation_counter = 0;
-    if (is_parked) {
-      is_parked = false;
-      Serial.println("Car is no longer parked. Data upload suspended.");
-    }
-  }
-}
-
-#if ENABLE_MQTT
-/**
  * Check WiFi connection and attempt to reconnect if needed
  */
 void check_wifi_connection() {
@@ -500,8 +443,9 @@ void check_wifi_connection() {
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     
     // Wait up to 10 seconds for connection
-    for (int i = 0; i < 10 && WiFi.status() != WL_CONNECTED; i++) {
-      delay(1000);
+    unsigned long startAttempt = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < WIFI_CONNECT_TIMEOUT) {
+      delay(500);
       Serial.print(".");
     }
     
@@ -511,14 +455,10 @@ void check_wifi_connection() {
       Serial.print("IP address: ");
       Serial.println(WiFi.localIP());
       
-      // Start web server for OTA updates now that we're connected
-      if (!server.started()) {
-        server.begin();
-        Serial.println("HTTP server started");
-      }
-      
-      // Connect to MQTT broker
+      // Connect to MQTT broker if enabled
+      #if ENABLE_MQTT
       connect_mqtt();
+      #endif
     } else {
       wifi_connected = false;
       Serial.println("Failed. Will retry later.");
@@ -529,6 +469,173 @@ void check_wifi_connection() {
   }
 }
 
+/**
+ * Setup web server routes for file browsing and download
+ */
+void setup_web_server() {
+  // Root page - redirects to getdata
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->redirect("/getdata");
+  });
+
+  // Data browser page
+  server.on("/getdata", HTTP_GET, [](AsyncWebServerRequest *request){
+    String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<title>Battery Monitor Data Files</title>";
+    html += "<style>body{font-family:Arial,sans-serif;margin:20px;}h1{color:#333;}ul{list-style-type:none;padding:0;}";
+    html += "li{margin:10px 0;padding:10px;border-radius:4px;background-color:#f2f2f2;}";
+    html += "a{text-decoration:none;color:#0066cc;display:block;}";
+    html += "a:hover{text-decoration:underline;}</style></head><body>";
+    html += "<h1>Battery Monitor Data Files</h1>";
+    
+    // Add root directory link
+    html += "<p><a href='/getdata?dir=/'>[Root Directory]</a></p>";
+    
+    // Get directory path from query parameter or use root
+    String path = "/";
+    if(request->hasParam("dir")) {
+      path = request->getParam("dir")->value();
+    }
+    
+    html += "<h2>Directory: " + path + "</h2>";
+    html += list_files(path);
+    html += "<hr><p><a href='/update'>OTA Update</a></p>";
+    html += "</body></html>";
+    
+    request->send(200, "text/html", html);
+  });
+
+  // File download handler
+  server.on("/download", HTTP_GET, [](AsyncWebServerRequest *request){
+    if(request->hasParam("file")) {
+      String filepath = request->getParam("file")->value();
+      
+      // Check if file exists
+      SdFile downloadFile;
+      if(downloadFile.open(filepath.c_str(), O_READ)) {
+        downloadFile.close();  // Close it immediately so that AsyncWebServer can handle it
+        
+        // Get file name from path
+        String filename = filepath;
+        int lastSlash = filepath.lastIndexOf('/');
+        if(lastSlash >= 0) {
+          filename = filepath.substring(lastSlash + 1);
+        }
+        
+        // Send file - read the file contents and send them
+        SdFile dataFile;
+        if (dataFile.open(filepath.c_str(), O_READ)) {
+          // Read file and send its contents
+          String fileContent = "";
+          char buffer[64];
+          int bytesRead;
+          
+          while ((bytesRead = dataFile.read(buffer, sizeof(buffer))) > 0) {
+            // Add read bytes to the string
+            for (int i = 0; i < bytesRead; i++) {
+              fileContent += buffer[i];
+            }
+          }
+          dataFile.close();
+          
+          // Set appropriate content type based on file extension
+          String contentType = "text/plain";
+          if (filename.endsWith(".txt")) contentType = "text/plain";
+          else if (filename.endsWith(".csv")) contentType = "text/csv";
+          else if (filename.endsWith(".json")) contentType = "application/json";
+          
+          request->send(200, contentType, fileContent);
+        } else {
+          request->send(404, "text/plain", "File not found");
+        }
+      } else {
+        request->send(404, "text/plain", "File not found");
+      }
+    } else {
+      request->send(400, "text/plain", "File parameter missing");
+    }
+  });
+
+  // Setup ElegantOTA
+  ElegantOTA.begin(&server);
+  
+  // Start the server
+  server.begin();
+  Serial.println("Web server started");
+}
+
+/**
+ * List all files in the given directory
+ * @param path Directory path on SD card
+ * @return HTML formatted file list
+ */
+String list_files(String path) {
+  String output = "<ul>";
+  
+  // End path with a slash if missing
+  if(!path.endsWith("/")) path += "/";
+  
+  // Try to open the directory
+  SdFile dir;
+  if(!dir.open(path.c_str(), O_READ)) {
+    return "<p>Failed to open directory</p>";
+  }
+  
+  // Add parent directory link if not in root
+  if(path != "/") {
+    // Get parent directory path
+    String parentPath = path;
+    // Remove trailing slash
+    parentPath.remove(parentPath.length() - 1);
+    // Find last slash
+    int lastSlash = parentPath.lastIndexOf('/');
+    if(lastSlash > 0) {
+      parentPath = parentPath.substring(0, lastSlash + 1);
+    } else {
+      parentPath = "/";
+    }
+    
+    output += "<li><a href='/getdata?dir=" + parentPath + "'>[Parent Directory]</a></li>";
+  }
+  
+  // Loop through files and directories
+  SdFile entry;
+  while(entry.openNext(&dir, O_READ)) {
+    char fileName[64];
+    entry.getName(fileName, sizeof(fileName));
+    String name = String(fileName);
+    
+    if(entry.isDir()) {
+      // Directory entry
+      output += "<li><a href='/getdata?dir=" + path + name + "'>[DIR] " + name + "</a></li>";
+    } else {
+      // File entry with download link and size
+      String size = get_file_size(entry.fileSize());
+      output += "<li><a href='/download?file=" + path + name + "'>" + name + " (" + size + ")</a></li>";
+    }
+    
+    entry.close();
+  }
+  
+  dir.close();
+  output += "</ul>";
+  
+  return output;
+}
+
+/**
+ * Format file size in human readable format
+ * @param bytes File size in bytes
+ * @return Formatted size string (e.g. "1.2 MB")
+ */
+String get_file_size(size_t bytes) {
+  if(bytes < 1024) return String(bytes) + " B";
+  else if(bytes < 1048576) return String(bytes / 1024.0, 1) + " KB";
+  else if(bytes < 1073741824) return String(bytes / 1048576.0, 1) + " MB";
+  else return String(bytes / 1073741824.0, 1) + " GB";
+}
+
+#if ENABLE_MQTT
 /**
  * Connect to MQTT broker
  */
@@ -541,7 +648,7 @@ void connect_mqtt() {
     Serial.print("Attempting MQTT connection...");
     
     // Attempt to connect
-    if (mqtt.connect("ESP32Client", mqtt_user, mqtt_pass)) {
+    if (mqtt.connect(mqtt_client_id, mqtt_user, mqtt_pass)) {
       Serial.println("connected");
       
       // Once connected, publish an announcement
@@ -735,11 +842,6 @@ void interface(float amps, int dir) {
   display.print("WiFi:");
   display.print(wifi_connected ? "Connected" : "Disconnected");
   
-  // Add parked status indicator
-  display.setCursor(0, 10);
-  display.print("Parked:");
-  display.print(is_parked ? "Yes" : "No");
-  
   // Call animation function for arrow
   move_arrow(dir, amps);
   
@@ -768,7 +870,7 @@ void move_arrow(int dir, float amps) {
     display.print(" A");
     
     // Animate the arrow
-    for (int i = 0; i < 3; i++) {  // Reduced animation cycles when parked
+    for (int i = 0; i < 3; i++) {  // Reduced animation cycles
       display.drawBitmap(x, 37, image_Pin_arrow_right_9x7_bits, 9, 7, WHITE);
       display.display();
       delay(10);
@@ -788,7 +890,7 @@ void move_arrow(int dir, float amps) {
     display.print(" A");
     
     // Animate the arrow
-    for (int i = 0; i < 3; i++) {  // Reduced animation cycles when parked
+    for (int i = 0; i < 3; i++) {  // Reduced animation cycles
       display.drawBitmap(x, 37, image_Pin_arrow_left_9x7_bits, 9, 7, WHITE);
       display.display();
       delay(10);
