@@ -35,6 +35,8 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <ElegantOTA.h>     // OTA update functionality
+#include <ESPAsyncWebServer.h>
+
 
 #if ENABLE_MQTT
 #include <PubSubClient.h>   // MQTT client
@@ -269,9 +271,6 @@ void setup() {
 
   if (!ads.begin()) {
     Serial.println("ERROR: Failed to initialize ADS1115!");
-    while (1) {
-      delay(100); // Halt system if ADC initialization fails
-    }
   }
   Serial.println("ADC initialized successfully");
 
@@ -542,7 +541,7 @@ void connect_mqtt() {
     Serial.print("Attempting MQTT connection...");
     
     // Attempt to connect
-    if (mqtt.connect(mqtt_client_id, mqtt_user, mqtt_pass)) {
+    if (mqtt.connect("ESP32Client", mqtt_user, mqtt_pass)) {
       Serial.println("connected");
       
       // Once connected, publish an announcement
