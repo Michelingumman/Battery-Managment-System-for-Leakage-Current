@@ -86,12 +86,13 @@ const int mqtt_port = MQTT_PORT;         // From secrets.h
 const char* mqtt_user = MQTT_USER;       // From secrets.h
 const char* mqtt_pass = MQTT_PASS;       // From secrets.h
 const char* mqtt_client_id = "ESP32_BatteryMonitor";
-const char* mqtt_topic_prefix = "battery/data/";
+const char* mqtt_topic_current = "battery/data/current";
+const char* mqtt_topic_voltage = "battery/data/voltage";
+const char* mqtt_topic_status = "battery/status";
 #endif
 
 // Timing settings
 const unsigned long WIFI_RETRY_INTERVAL = 60000;  // Try to reconnect WiFi every minute
-const unsigned long MQTT_UPLOAD_INTERVAL = 120000; // Check for data to upload every 2 minutes
 const unsigned long WIFI_CONNECT_TIMEOUT = 10000; // 10 seconds timeout for WiFi connection
 
 // ===== OBJECT INITIALIZATION =====
@@ -125,9 +126,6 @@ int i = 1;
 // Connection state variables
 bool wifi_connected = false;
 unsigned long last_wifi_attempt = 0;
-unsigned long last_mqtt_upload = 0;
-String uploaded_files[50];  // Keep track of uploaded files
-int num_uploaded_files = 0;
 
 // ===== FUNCTION DECLARATIONS =====
 // OTA callback functions
@@ -144,10 +142,8 @@ void write_file(float data, int count, String filename); // Log data to SD card
 void check_wifi_connection();            // Check and attempt to reconnect WiFi
 
 #if ENABLE_MQTT
-void connect_mqtt();                     // Connect to MQTT broker
-void check_and_upload_data();            // Upload stored data when connected
-bool upload_file_to_mqtt(String filepath); // Upload a specific file
-bool is_file_uploaded(String filepath);  // Check if file was already uploaded
+bool connect_mqtt();                     // Connect to MQTT broker
+void publish_data_point(float current, float voltage, DateTime timestamp); // Publish single data point
 #endif
 
 // Web server functions
@@ -287,20 +283,14 @@ void loop() {
     check_wifi_connection();
   }
   
-  // Check for MQTT upload if connected
-  #if ENABLE_MQTT
-  if (wifi_connected && mqtt.connected() && 
-      (millis() - last_mqtt_upload > MQTT_UPLOAD_INTERVAL)) {
-    check_and_upload_data();
-    last_mqtt_upload = millis();
-  }
-  #endif
-  
   // Collect and log data every minute (60 samples at ~1 second intervals)
   while (count < 60) {
     // Read voltage and current values
     float data_in_amps = get_adc_data_in_A();
     float data_in_volts = get_adc_data_in_V();
+    
+    // Get current time
+    DateTime timestamp = rtc.now();
     
     // Display readings on serial monitor
     Serial.printf("Volts: %.2fV | Amps: %.2fA | WiFi: %s\n", 
@@ -310,6 +300,20 @@ void loop() {
     // Files are named "Amps YYYY-MM-DD.txt" and "Volts YYYY-MM-DD.txt"
     write_file(data_in_amps, count, "Amps ");
     write_file(data_in_volts, count, "Volts ");
+    
+    // Send data to MQTT if connected
+    #if ENABLE_MQTT
+    if (wifi_connected && mqtt.connected()) {
+      publish_data_point(data_in_amps, data_in_volts, timestamp);
+    } else if (wifi_connected && !mqtt.connected()) {
+      // Try to reconnect to MQTT if WiFi is connected but MQTT is not
+      connect_mqtt();
+    }
+    // Keep MQTT client connection alive
+    if (mqtt.connected()) {
+      mqtt.loop();
+    }
+    #endif
     
 #if ENABLE_DISPLAY
     // Update the display with current readings
@@ -327,13 +331,6 @@ void loop() {
     // Wait approximately 1 second before next sample
     delay(980); // Adjusted for code execution time
     count++;
-    
-    // Keep MQTT connection alive if connected
-    #if ENABLE_MQTT
-    if (mqtt.connected()) {
-      mqtt.loop();
-    }
-    #endif
   }
 
   // Log completion of one minute cycle
@@ -610,7 +607,8 @@ String list_files(String path) {
       output += "<li><a href='/getdata?dir=" + path + name + "'>[DIR] " + name + "</a></li>";
     } else {
       // File entry with download link and size
-      String size = get_file_size(entry.fileSize());
+      // String size = get_file_size(entry.fileSize());
+      String size = "1mb";
       output += "<li><a href='/download?file=" + path + name + "'>" + name + " (" + size + ")</a></li>";
     }
     
@@ -638,23 +636,24 @@ String get_file_size(size_t bytes) {
 #if ENABLE_MQTT
 /**
  * Connect to MQTT broker
+ * @return true if successfully connected, false otherwise
  */
-void connect_mqtt() {
-  if (!wifi_connected) return;
+bool connect_mqtt() {
+  if (!wifi_connected) return false;
   
   // Loop until we're connected
   int attempts = 0;
   while (!mqtt.connected() && attempts < 3) {
     Serial.print("Attempting MQTT connection...");
     
-    // Attempt to connect
-    if (mqtt.connect(mqtt_client_id, mqtt_user, mqtt_pass)) {
+    // Attempt to connect with last will message for status
+    if (mqtt.connect(mqtt_client_id, mqtt_user, mqtt_pass, 
+                    mqtt_topic_status, 0, false, "{\"status\":\"offline\"}")) {
       Serial.println("connected");
       
-      // Once connected, publish an announcement
-      String announce_topic = String(mqtt_topic_prefix) + "status";
-      mqtt.publish(announce_topic.c_str(), "ESP32 Battery Monitor connected");
-      
+      // Once connected, publish an online status message
+      mqtt.publish(mqtt_topic_status, "{\"status\":\"online\",\"ip\":\"" + WiFi.localIP().toString() + "\"}", true);
+      return true;
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqtt.state());
@@ -663,154 +662,53 @@ void connect_mqtt() {
       attempts++;
     }
   }
-}
-
-/**
- * Check SD card for data files and upload them to MQTT broker if connected
- */
-void check_and_upload_data() {
-  if (!wifi_connected || !mqtt.connected()) return;
   
-  Serial.println("Checking for data to upload...");
-  
-  // Open the SD card root directory
-  SdFile root;
-  if (!root.open("/")) {
-    Serial.println("ERROR: Failed to open root directory");
-    return;
-  }
-  
-  // Create a buffer for file objects
-  SdFile file;
-  
-  // Loop through all files
-  while (file.openNext(&root, O_READ)) {
-    char filename[64];
-    file.getName(filename, sizeof(filename));
-    file.close();
-    
-    // Check if it's a data file (Amps or Volts) and hasn't been uploaded
-    String filenameStr = String(filename);
-    if ((filenameStr.startsWith("Amps") || filenameStr.startsWith("Volts")) && 
-        filenameStr.endsWith(".txt") && 
-        !is_file_uploaded(filenameStr)) {
-      
-      Serial.print("Found data file to upload: ");
-      Serial.println(filenameStr);
-      
-      // Upload the file
-      if (upload_file_to_mqtt(filenameStr)) {
-        // Add to uploaded files list
-        if (num_uploaded_files < 50) {
-          uploaded_files[num_uploaded_files++] = filenameStr;
-          Serial.println("File uploaded successfully");
-        } else {
-          Serial.println("Warning: Uploaded files list full. Oldest entries may be re-uploaded.");
-          // Shift array to make room
-          for (int i = 0; i < 49; i++) {
-            uploaded_files[i] = uploaded_files[i+1];
-          }
-          uploaded_files[49] = filenameStr;
-        }
-      } else {
-        Serial.println("Failed to upload file");
-      }
-    }
-  }
-  
-  root.close();
-}
-
-/**
- * Upload a file to MQTT broker
- * @param filepath Path to the file to upload
- * @return true if successful, false otherwise
- */
-bool upload_file_to_mqtt(String filepath) {
-  // Open the file
-  SdFile dataFile;
-  if (!dataFile.open(filepath.c_str(), O_READ)) {
-    Serial.println("ERROR: Failed to open data file");
-    return false;
-  }
-  
-  // Determine the topic based on file type
-  String topic;
-  if (filepath.startsWith("Amps")) {
-    topic = String(mqtt_topic_prefix) + "current";
-  } else if (filepath.startsWith("Volts")) {
-    topic = String(mqtt_topic_prefix) + "voltage";
-  } else {
-    topic = String(mqtt_topic_prefix) + "other";
-  }
-  
-  // Extract date from filename to include in message
-  String date = "";
-  int datePos = filepath.indexOf("20"); // Find year (20xx)
-  if (datePos > 0) {
-    date = filepath.substring(datePos, datePos + 10); // YYYY-MM-DD
-  }
-  
-  // Create a buffer for reading the file
-  const int bufferSize = 128;
-  char buffer[bufferSize];
-  
-  // Read and publish the file line by line
-  int lineCount = 0;
-  int byteCount = 0;
-  bool success = true;
-  
-  while (dataFile.available()) {
-    int bytesRead = dataFile.fgets(buffer, bufferSize);
-    if (bytesRead <= 0) break;
-    
-    // Create message with metadata
-    String message = String(date) + "|" + String(lineCount) + "|" + String(buffer);
-    
-    // Publish to MQTT (with retry)
-    int retries = 0;
-    while (!mqtt.publish(topic.c_str(), message.c_str()) && retries < 3) {
-      Serial.println("Failed to publish, retrying...");
-      delay(100);
-      mqtt.loop();
-      retries++;
-    }
-    
-    if (retries >= 3) {
-      success = false;
-      break;
-    }
-    
-    lineCount++;
-    byteCount += bytesRead;
-    
-    // Process MQTT messages to keep connection alive
-    mqtt.loop();
-  }
-  
-  dataFile.close();
-  
-  // Publish a summary message with file metadata
-  String summaryTopic = String(mqtt_topic_prefix) + "summary";
-  String summaryMsg = String(date) + "|" + filepath + "|lines:" + 
-                      String(lineCount) + "|bytes:" + String(byteCount);
-  mqtt.publish(summaryTopic.c_str(), summaryMsg.c_str());
-  
-  return success;
-}
-
-/**
- * Check if a file has already been uploaded
- * @param filepath Path of the file to check
- * @return true if already uploaded, false otherwise
- */
-bool is_file_uploaded(String filepath) {
-  for (int i = 0; i < num_uploaded_files; i++) {
-    if (uploaded_files[i] == filepath) {
-      return true;
-    }
-  }
   return false;
+}
+
+/**
+ * Publish a single data point to MQTT
+ * @param current Current measurement in Amperes
+ * @param voltage Voltage measurement in Volts
+ * @param timestamp Timestamp of the measurement
+ */
+void publish_data_point(float current, float voltage, DateTime timestamp) {
+  if (!mqtt.connected()) return;
+  
+  // Create JSON-like message with timestamp and values
+  char buffer[150];
+  sprintf(buffer, 
+          "{\"timestamp\":\"%04d-%02d-%02d %02d:%02d:%02d\",\"current\":%.3f,\"voltage\":%.2f}", 
+          timestamp.year(), timestamp.month(), timestamp.day(),
+          timestamp.hour(), timestamp.minute(), timestamp.second(),
+          current, voltage);
+  
+  // Publish current value to current topic
+  int retries = 0;
+  while (!mqtt.publish(mqtt_topic_current, buffer) && retries < 3) {
+    Serial.println("Failed to publish current data, retrying...");
+    delay(100);
+    mqtt.loop();
+    retries++;
+  }
+  
+  // Publish voltage to voltage topic (use the same message for simplicity)
+  retries = 0;
+  while (!mqtt.publish(mqtt_topic_voltage, buffer) && retries < 3) {
+    Serial.println("Failed to publish voltage data, retrying...");
+    delay(100);
+    mqtt.loop();
+    retries++;
+  }
+  
+  if (retries >= 3) {
+    Serial.println("Failed to publish one or more data points");
+  } else {
+    Serial.println("Data published to MQTT successfully");
+  }
+  
+  // Process any incoming messages
+  mqtt.loop();
 }
 #endif
 
