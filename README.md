@@ -1,43 +1,95 @@
-# ESP32 Battery Management System
+<div align="center">
+  <h1>🔋 ESP32 Battery Management System 🔌</h1>
+  <p><em>A comprehensive solution for monitoring battery performance with wireless connectivity, data logging, and real-time analysis</em></p>
 
-A comprehensive ESP32-based system for monitoring battery performance with wireless connectivity, data logging, and real-time analysis.
-![image](https://github.com/user-attachments/assets/de285fad-d931-4771-810e-c3d69a32fc3e)
+  <p>
+    <img src="https://img.shields.io/badge/ESP32-Enabled-blue?style=flat-square&logo=espressif" alt="ESP32"/>
+    <img src="https://img.shields.io/badge/MQTT-Connected-green?style=flat-square&logo=mqtt" alt="MQTT"/>
+    <img src="https://img.shields.io/badge/OTA-Updates-orange?style=flat-square&logo=arduino" alt="OTA"/>
+    <img src="https://img.shields.io/badge/Web-Interface-purple?style=flat-square&logo=html5" alt="Web"/>
+  </p>
+</div>
 
-![System Overview](https://github.com/user-attachments/assets/bb96bbee-dab2-4f67-a350-726b1b63d7a1)
-![image](https://github.com/user-attachments/assets/5f308408-5da9-487b-b2f8-30014f531c52)
+<div align="center">
+  <table>
+    <tr>
+      <td width="70%">
+        <img src="https://github.com/user-attachments/assets/de285fad-d931-4771-810e-c3d69a32fc3e" width="100%" alt="MQTT Dashboard"/>
+        <p align="center"><strong>MQTT Dashboard</strong> - Real-time monitoring</p>
+      </td>
+      <td width="50%">
+        <img src="https://github.com/user-attachments/assets/bb96bbee-dab2-4f67-a350-726b1b63d7a1" width="100%" alt="System Overview"/>
+        <p align="center"><strong>Added Display</strong> - Intuative animation</p>
+      </td>
+    </tr>
+  </table>
+</div>
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/5f308408-5da9-487b-b2f8-30014f531c52" width="90%" alt="OLED Display"/>
+  <br>
+  <em>On-device OLED display showing current battery status</em>
+</p>
 
-## Features
+---
 
-- **High-Precision Measurements**: Uses ADS1115 16-bit ADC for accurate voltage and current readings
-- **Data Logging**: Automatically records measurements to SD card with timestamps
-- **Web Interface**: Access and download logged data files via browser without removing SD card
-- **Real-Time MQTT**: Publishes data points to MQTT broker for remote monitoring
-- **OTA Updates**: Update firmware wirelessly through web interface
-- **Optional Display**: OLED display support for direct status viewing (configurable)
+## ✨ Features
 
-## Hardware Requirements
+- **📊 High-Precision Measurements**: Uses ADS1115 16-bit ADC for accurate voltage and current readings
+- **💾 Data Logging**: Automatically records measurements to SD card with timestamps
+- **🌐 Web Interface**: Access and download logged data files via browser without removing SD card
+- **📡 Real-Time MQTT**: Publishes data points to MQTT broker for remote monitoring
+- **🔄 OTA Updates**: Update firmware wirelessly through web interface
+- **📱 Optional Display**: OLED display support for direct status viewing (configurable)
 
-- ESP32 development board
-- ADS1115 16-bit ADC module
-- DS3231 RTC module
-- SD card module
-- Current shunt (100A/75mV)
-- Optional: SSD1306 OLED display
+## 🛠️ Hardware Requirements
 
-## Software Dependencies
+<div align="center">
+  <table>
+    <tr>
+      <td align="center"><b>Component</b></td>
+      <td align="center"><b>Purpose</b></td>
+    </tr>
+    <tr>
+      <td>ESP32 Development Board</td>
+      <td>Main controller with WiFi capability</td>
+    </tr>
+    <tr>
+      <td>ADS1115 16-bit ADC Module</td>
+      <td>High-precision analog-to-digital conversion</td>
+    </tr>
+    <tr>
+      <td>DS3231 RTC Module</td>
+      <td>Accurate timestamping of measurements</td>
+    </tr>
+    <tr>
+      <td>SD Card Module</td>
+      <td>Data storage and logging</td>
+    </tr>
+    <tr>
+      <td>Current Shunt (100A/75mV)</td>
+      <td>Current measurement</td>
+    </tr>
+    <tr>
+      <td>SSD1306 OLED Display (Optional)</td>
+      <td>Real-time data visualization</td>
+    </tr>
+  </table>
+</div>
 
-- Arduino IDE with ESP32 support
-- Libraries:
-  - WiFi, AsyncTCP, ESPAsyncWebServer
-  - SdFat
-  - RTClib
-  - Adafruit_ADS1X15
-  - PubSubClient (for MQTT)
-  - ElegantOTA
-  - Adafruit_GFX and Adafruit_SSD1306 (if using display)
+## 📚 Software Dependencies
 
-## Setup
+- **Arduino IDE** with ESP32 support
+- **Libraries**:
+  - `WiFi`, `AsyncTCP`, `ESPAsyncWebServer` - Network connectivity
+  - `SdFat` - SD card file operations
+  - `RTClib` - RTC module interface
+  - `Adafruit_ADS1X15` - ADC interface
+  - `PubSubClient` - MQTT functionality
+  - `ElegantOTA` - Over-the-air updates
+  - `Adafruit_GFX` and `Adafruit_SSD1306` - Display support (if enabled)
+
+## 🚀 Setup
 
 1. **Create a `secrets.h` file** with your credentials:
    ```cpp
@@ -52,20 +104,20 @@ A comprehensive ESP32-based system for monitoring battery performance with wirel
 2. **Connect hardware components** according to pinout defined in code
 3. **Upload the firmware** to ESP32
 
-## Usage
+## 📖 Usage
 
-### Data Collection
+### 📊 Data Collection
 - The system automatically logs current and voltage data to SD card
 - Data files are named `Amps YYYY-MM-DD.txt` and `Volts YYYY-MM-DD.txt`
 - Each line contains timestamped measurements in the format `HH:MM:SS --> value1, value2, ...`
 
-### Web Interface
+### 🌐 Web Interface
 1. Connect to the same WiFi network as ESP32
 2. Navigate to `http://<ESP32_IP_ADDRESS>/getdata`
 3. Browse and download data files directly through your browser
 4. Access OTA update page at `http://<ESP32_IP_ADDRESS>/update`
 
-### MQTT Monitoring
+### 📡 MQTT Monitoring
 The system publishes to three MQTT topics:
 
 1. `battery/data/current` - Real-time current measurements
@@ -81,7 +133,7 @@ Message format (JSON):
 }
 ```
 
-## Configuration
+## ⚙️ Configuration
 
 Key parameters can be adjusted in the code:
 - WiFi reconnection interval
@@ -89,11 +141,11 @@ Key parameters can be adjusted in the code:
 - Display settings
 - SD card pins
 
-## License
+## 📄 License
 
 MIT License
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
 - Thanks to all libraries and their contributors
 - Inspired by various battery monitoring projects
