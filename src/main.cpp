@@ -27,6 +27,11 @@
 // Set to 1 to enable MQTT data upload, 0 to disable
 #define ENABLE_MQTT 1
 
+#define UPDATE_RTC_TIME 0
+
+#define VOLTAGE_OFFSET 0.2
+#define CURRENT_OFFSET 0.0
+
 // ===== INCLUDE LIBRARIES =====
 #include <Arduino.h>
 #include <Wire.h>
@@ -222,9 +227,16 @@ void setup() {
       delay(100); // Halt system if RTC initialization fails
     }
   }
-  
-  // Set RTC to compilation time
-  rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+
+  #if UPDATE_RTC_TIME
+    // Set RTC to compilation time
+
+    // rtc.adjust(DateTime(F(__DATE__), F(__TIME__ + 1 minute))) 
+    //since the codebase is getting large then we need to compensate for the build time ;)
+    rtc.adjust(DateTime(F(__DATE__), F("01:41:20")));
+    // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  #endif
+
   DateTime time = rtc.now();
   Serial.print("Current time: ");
   Serial.printf("%02d:%02d:%02d\n", time.hour(), time.minute(), time.second());
@@ -268,6 +280,11 @@ void setup() {
   Serial.println("Setup complete!");
 }
 
+
+
+int previous_time = 0;
+int time_now = 0;
+
 // ===== MAIN LOOP =====
 void loop() {
   // Handle OTA updates if WiFi connected
@@ -285,52 +302,61 @@ void loop() {
   
   // Collect and log data every minute (60 samples at ~1 second intervals)
   while (count < 60) {
-    // Read voltage and current values
-    float data_in_amps = get_adc_data_in_A();
-    float data_in_volts = get_adc_data_in_V();
-    
-    // Get current time
-    DateTime timestamp = rtc.now();
-    
-    // Display readings on serial monitor
-    Serial.printf("Volts: %.2fV | Amps: %.2fA | WiFi: %s\n", 
-                 data_in_volts, data_in_amps, wifi_connected ? "Connected" : "Disconnected");
-    
-    // Write data to SD card files
-    // Files are named "Amps YYYY-MM-DD.txt" and "Volts YYYY-MM-DD.txt"
-    write_file(data_in_amps, count, "Amps ");
-    write_file(data_in_volts, count, "Volts ");
-    
-    // Send data to MQTT if connected
-    #if ENABLE_MQTT
-    if (wifi_connected && mqtt.connected()) {
-      publish_data_point(data_in_amps, data_in_volts, timestamp);
-    } else if (wifi_connected && !mqtt.connected()) {
-      // Try to reconnect to MQTT if WiFi is connected but MQTT is not
-      connect_mqtt();
+
+     //if one seconds passed then run the data logging, else wait until one second
+    time_now = millis();
+    if((time_now - previous_time) >= 1000){
+              previous_time = millis();
+
+
+              // Read voltage and current values
+              float data_in_amps = get_adc_data_in_A();
+              float data_in_volts = get_adc_data_in_V();
+              
+              // Get current time
+              DateTime timestamp = rtc.now();
+              
+              // Display readings on serial monitor
+              Serial.printf("Volts: %.1fV | Amps: %.2fA | WiFi: %s\n", 
+                          data_in_volts, data_in_amps, wifi_connected ? "Connected" : "Disconnected");
+              
+              // Write data to SD card files
+              // Files are named "Amps YYYY-MM-DD.txt" and "Volts YYYY-MM-DD.txt"
+              write_file(data_in_amps, count, "Amps ");
+              write_file(data_in_volts, count, "Volts ");
+              
+              // Send data to MQTT if connected
+              #if ENABLE_MQTT
+              if (wifi_connected && mqtt.connected()) {
+                publish_data_point(data_in_amps, data_in_volts, timestamp);
+              } else if (wifi_connected && !mqtt.connected()) {
+                // Try to reconnect to MQTT if WiFi is connected but MQTT is not
+                connect_mqtt();
+              }
+              // Keep MQTT client connection alive
+              if (mqtt.connected()) {
+                mqtt.loop();
+              }
+              #endif
+              
+              #if ENABLE_DISPLAY
+                  // Update the display with current readings
+                  // Determine current direction (charging or discharging)
+                  if (data_in_amps < 0) {
+                    direction = RIGHT; // Charging
+                  } else {
+                    direction = LEFT;  // Discharging
+                  }
+                  
+                  // Update display interface with current values and direction
+                  interface(data_in_amps, direction);
+              #endif
+              
+              // Wait approximately 1 second before next sample
+              // delay(980); // Adjusted for code execution time
+              count++;
+
     }
-    // Keep MQTT client connection alive
-    if (mqtt.connected()) {
-      mqtt.loop();
-    }
-    #endif
-    
-#if ENABLE_DISPLAY
-    // Update the display with current readings
-    // Determine current direction (charging or discharging)
-    if (data_in_amps < 0) {
-      direction = RIGHT; // Charging
-    } else {
-      direction = LEFT;  // Discharging
-    }
-    
-    // Update display interface with current values and direction
-    interface(data_in_amps, direction);
-#endif
-    
-    // Wait approximately 1 second before next sample
-    delay(980); // Adjusted for code execution time
-    count++;
   }
 
   // Log completion of one minute cycle
@@ -377,7 +403,8 @@ float get_adc_data_in_V() {
   results = ads.readADC_SingleEnded(2);
   
   // Convert to volts (includes voltage divider factor of 2)
-  float volts = float(2 * Voltmultiplier * results);
+  float volts_ = float(2 * Voltmultiplier * results) + VOLTAGE_OFFSET;
+  float volts = round(volts_*10)/10;
   return volts;
 }
 
@@ -652,7 +679,8 @@ bool connect_mqtt() {
       Serial.println("connected");
       
       // Once connected, publish an online status message
-      mqtt.publish(mqtt_topic_status, "{\"status\":\"online\",\"ip\":\"" + WiFi.localIP().toString() + "\"}", true);
+      String status_message = "{\"status\":\"online\",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
+      mqtt.publish(mqtt_topic_status, status_message.c_str(), true);
       return true;
     } else {
       Serial.print("failed, rc=");
