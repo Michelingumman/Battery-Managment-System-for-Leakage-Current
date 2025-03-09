@@ -1,8 +1,11 @@
 # ESP32 Battery Management System
 
 A comprehensive ESP32-based system for monitoring battery performance with wireless connectivity, data logging, and real-time analysis.
+![image](https://github.com/user-attachments/assets/de285fad-d931-4771-810e-c3d69a32fc3e)
 
 ![System Overview](https://github.com/user-attachments/assets/bb96bbee-dab2-4f67-a350-726b1b63d7a1)
+![image](https://github.com/user-attachments/assets/5f308408-5da9-487b-b2f8-30014f531c52)
+
 
 ## Features
 
