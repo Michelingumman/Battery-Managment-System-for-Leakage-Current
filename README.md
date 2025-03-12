@@ -1,120 +1,152 @@
-# Battery Management System for Leakage Current
-![image](https://github.com/user-attachments/assets/bb96bbee-dab2-4f67-a350-726b1b63d7a1)
+<div align="center">
+  <h1>🔋 ESP32 Battery Management System 🔌</h1>
+  <p><em>A comprehensive solution for monitoring battery performance with wireless connectivity, data logging, and real-time analysis</em></p>
 
-A comprehensive system for monitoring, analyzing, and visualizing battery charging and discharging patterns, with a focus on leakage current measurement. This project combines ESP32-based data acquisition with Python-based data visualization.
+  <p>
+    <img src="https://img.shields.io/badge/ESP32-Enabled-blue?style=flat-square&logo=espressif" alt="ESP32"/>
+    <img src="https://img.shields.io/badge/MQTT-Connected-green?style=flat-square&logo=mqtt" alt="MQTT"/>
+    <img src="https://img.shields.io/badge/OTA-Updates-orange?style=flat-square&logo=arduino" alt="OTA"/>
+    <img src="https://img.shields.io/badge/Web-Interface-purple?style=flat-square&logo=html5" alt="Web"/>
+  </p>
+</div>
 
-![image](https://github.com/user-attachments/assets/3e27d749-df2c-4710-be02-5afdb6bcb3d6)
-![image](https://github.com/user-attachments/assets/0eef07d9-9b81-4e27-b7ef-9badf6db41ec)
+<div align="center">
+  <table>
+    <tr>
+      <td width="70%">
+        <img src="https://github.com/user-attachments/assets/de285fad-d931-4771-810e-c3d69a32fc3e" width="100%" alt="MQTT Dashboard"/>
+        <p align="center"><strong>MQTT Dashboard</strong> - Real-time monitoring</p>
+      </td>
+      <td width="50%">
+        <img src="https://github.com/user-attachments/assets/bb96bbee-dab2-4f67-a350-726b1b63d7a1" width="100%" alt="System Overview"/>
+        <p align="center"><strong>Added Display</strong> - Intuative animation</p>
+      </td>
+    </tr>
+  </table>
+</div>
 
-## Overview
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/5f308408-5da9-487b-b2f8-30014f531c52" width="90%" alt="OLED Display"/>
+  <br>
+  <em>On-device OLED display showing current battery status</em>
+</p>
 
-This project provides tools to collect, process, and visualize battery data, helping to understand battery performance, discharge patterns, and capacity utilization. The system works with time-series data of voltage and current measurements to create detailed performance visualizations.
+---
 
-## System Architecture
+## ✨ Features
 
-The system consists of two main components:
+- **📊 High-Precision Measurements**: Uses ADS1115 16-bit ADC for accurate voltage and current readings
+- **💾 Data Logging**: Automatically records measurements to SD card with timestamps
+- **🌐 Web Interface**: Access and download logged data files via browser without removing SD card
+- **📡 Real-Time MQTT**: Publishes data points to MQTT broker for remote monitoring
+- **🔄 OTA Updates**: Update firmware wirelessly through web interface
+- **📱 Optional Display**: OLED display support for direct status viewing (configurable)
 
-1. **ESP32-based Data Acquisition System**: Collects voltage and current data using precision ADCs
-2. **Python-based Visualization Tool**: Processes and visualizes the collected data
+## 🛠️ Hardware Requirements
 
-## Features
+<div align="center">
+  <table>
+    <tr>
+      <td align="center"><b>Component</b></td>
+      <td align="center"><b>Purpose</b></td>
+    </tr>
+    <tr>
+      <td>ESP32 Development Board</td>
+      <td>Main controller with WiFi capability</td>
+    </tr>
+    <tr>
+      <td>ADS1115 16-bit ADC Module</td>
+      <td>High-precision analog-to-digital conversion</td>
+    </tr>
+    <tr>
+      <td>DS3231 RTC Module</td>
+      <td>Accurate timestamping of measurements</td>
+    </tr>
+    <tr>
+      <td>SD Card Module</td>
+      <td>Data storage and logging</td>
+    </tr>
+    <tr>
+      <td>Current Shunt (100A/75mV)</td>
+      <td>Current measurement</td>
+    </tr>
+    <tr>
+      <td>SSD1306 OLED Display (Optional)</td>
+      <td>Real-time data visualization</td>
+    </tr>
+  </table>
+</div>
 
-### Hardware Capabilities (ESP32)
-- **Precision Measurement**: Uses high-resolution ADC for accurate current and voltage readings
-- **Real-time Data Collection**: Programmable sampling rate via timer interrupts
-- **Data Storage**: Writes timestamped data to separate files for voltage and current
-- **Battery Connection Monitoring**: Detects and logs charging and discharging states
+## 📚 Software Dependencies
 
+- **Arduino IDE** with ESP32 support
+- **Libraries**:
+  - `WiFi`, `AsyncTCP`, `ESPAsyncWebServer` - Network connectivity
+  - `SdFat` - SD card file operations
+  - `RTClib` - RTC module interface
+  - `Adafruit_ADS1X15` - ADC interface
+  - `PubSubClient` - MQTT functionality
+  - `ElegantOTA` - Over-the-air updates
+  - `Adafruit_GFX` and `Adafruit_SSD1306` - Display support (if enabled)
 
-### Visualization Capabilities (Python)
-- **Advanced Visualization**: Creates multi-axis plots showing:
-  - Current (A) over time
-  - Voltage (V) over time
-  - Cumulative discharge capacity (Ah)
+## 🚀 Setup
 
+1. **Create a `secrets.h` file** with your credentials:
+   ```cpp
+   #define WIFI_SSID "your_wifi_ssid"
+   #define WIFI_PASS "your_wifi_password"
+   #define MQTT_SERVER "your_mqtt_broker_address"
+   #define MQTT_PORT 1883
+   #define MQTT_USER "your_mqtt_username"
+   #define MQTT_PASS "your_mqtt_password"
+   ```
 
-## ESP32 Implementation
+2. **Connect hardware components** according to pinout defined in code
+3. **Upload the firmware** to ESP32
 
-### Hardware Requirements
-- ESP32 development board
-- Precision voltage divider for battery voltage measurement
-- Current sensor (Shunt resistor or similar)
-- microSD card module for data storage
-- Real-time clock module (optional for precise timestamping)
+## 📖 Usage
 
-### Libraries Used
-- **SD.h**: File system operations on SD card
-- **SPI.h**: Communication with SD card module
-- **Wire.h**: I2C communication for optional peripherals
-- **ESP32Time.h**: Real-time clock management
-- **Arduino.h**: Core Arduino functionality
+### 📊 Data Collection
+- The system automatically logs current and voltage data to SD card
+- Data files are named `Amps YYYY-MM-DD.txt` and `Volts YYYY-MM-DD.txt`
+- Each line contains timestamped measurements in the format `HH:MM:SS --> value1, value2, ...`
 
-### Key Functions
+### 🌐 Web Interface
+1. Connect to the same WiFi network as ESP32
+2. Navigate to `http://<ESP32_IP_ADDRESS>/getdata`
+3. Browse and download data files directly through your browser
+4. Access OTA update page at `http://<ESP32_IP_ADDRESS>/update`
 
-```cpp
-// Get current measurement from ADC and convert to Amperes
-float get_adc_data_in_A() {
-    // Read from ADC and apply calibration factors
-    // Returns current in Amperes
+### 📡 MQTT Monitoring
+The system publishes to three MQTT topics:
+
+1. `battery/data/current` - Real-time current measurements
+2. `battery/data/voltage` - Real-time voltage measurements 
+3. `battery/status` - Connection status with device IP address
+
+Message format (JSON):
+```json
+{
+  "timestamp": "2024-06-03 14:35:22",
+  "current": 0.123,
+  "voltage": 12.45
 }
-
-// Get voltage measurement from ADC and convert to Volts
-float get_adc_data_in_V() {
-    // Read from ADC and apply voltage divider formula
-    // Returns voltage in Volts
-}
-
-// Write data to file with timestamp
-void write_file(float data, int count, String filename) {
-    // Format data with timestamp
-    // Write to SD card with appropriate file structure
-}
-
 ```
 
-### Data Collection Process
-1. System initializes SD card and sensors in `setup()`
-3. Current and voltage are measured using the ADC
-4. Readings are converted to appropriate units using calibration factors
-5. Data is written to timestamp-formatted files on the SD card
-6. Files are organized by date for easy analysis
+## ⚙️ Configuration
 
-## Data File Structure
+Key parameters can be adjusted in the code:
+- WiFi reconnection interval
+- MQTT topic names
+- Display settings
+- SD card pins
 
-The system generates data files in the following locations:
-```
-visualization/files/YYYY-MM-DD/Amps YYYY-MM-DD.txt
-visualization/files/YYYY-MM-DD/Volts YYYY-MM-DD.txt
-```
+## 📄 License
 
-Each data file contains timestamped readings in the format:
-```
-HH:MM:SS --> value1, value2, ...
-```
+MIT License
 
-## Usage
+## 🙏 Acknowledgments
 
-### Data Collection
-1. Connect the ESP32 system to your battery
-2. Power on the system
-3. Data will be automatically logged to the SD card
-4. Transfer the SD card data to your computer in the appropriate folder structure
-
-### Data Visualization
-To visualize battery data, run:
-
-```bash
-python visualization/Volts_vs_Amps.py [YYYY-MM-DD]
-```
-
-- If a date is provided, data for that specific date will be plotted
-- If no date is provided, the latest available data will be used
-- The script automatically finds the appropriate data files and creates visualization plots
-
-## Output
-
-The script generates:
-1. A combined visualization showing all metrics on a single time-axis plot
-2. Summary statistics in the console output
-3. Saved plot images in the `visualization/plots` directory
+- Thanks to all libraries and their contributors
+- Inspired by various battery monitoring projects
 
