@@ -1,5 +1,6 @@
-/**
- * Battery Management System for Leakage Current
+/** CREATED BY ADAM AND MATTIAS MICHELIN
+ * 
+ * Battery Management System for Leakage Current Monitoring
  * 
  * This ESP32-based system monitors battery voltage and current,
  * storing timestamped readings to SD card files for later analysis.
@@ -29,7 +30,7 @@
 
 #define UPDATE_RTC_TIME 0
 
-#define VOLTAGE_OFFSET 0.2
+#define VOLTAGE_OFFSET 0.4
 #define CURRENT_OFFSET 0.0
 
 // ===== INCLUDE LIBRARIES =====
@@ -317,7 +318,7 @@ void loop() {
               DateTime timestamp = rtc.now();
               
               // Display readings on serial monitor
-              Serial.printf("Volts: %.1fV | Amps: %.2fA | WiFi: %s\n", 
+              Serial.printf("Volts: %.2fV | Amps: %.2fA | WiFi: %s\n", 
                           data_in_volts, data_in_amps, wifi_connected ? "Connected" : "Disconnected");
               
               // Write data to SD card files
