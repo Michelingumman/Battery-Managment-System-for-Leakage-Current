@@ -95,7 +95,8 @@ const char* mqtt_client_id = "ESP32_BatteryMonitor";
 const char* mqtt_topic_current = "battery/data/current";
 const char* mqtt_topic_voltage = "battery/data/voltage";
 const char* mqtt_topic_status = "battery/status";
-const char* mqtt_topic_error = "battery/error";  // New topic for error messages
+const char* mqtt_topic_error = "battery/error";  // Topic for error messages
+const char* mqtt_topic_log = "battery/log";      // New topic for general status messages and logs
 #endif
 
 // Timing settings
@@ -157,6 +158,7 @@ void check_wifi_connection();            // Check and attempt to reconnect WiFi
 bool connect_mqtt();                     // Connect to MQTT broker
 void publish_data_point(float current, float voltage, DateTime timestamp); // Publish single data point
 void publish_error(const char* error_source, const char* error_message); // Publish error message
+void publish_log(const char* source, const char* message, const char* status = "info"); // Publish status/log message
 #endif
 
 // Web server functions
@@ -295,6 +297,10 @@ int time_now = 0;
 
 // ===== MAIN LOOP =====
 void loop() {
+  static unsigned long last_status_report = 0;
+  static unsigned long uptime = 0;
+  static uint32_t total_samples = 0;
+  
   // Handle OTA updates if WiFi connected
   if (wifi_connected) {
     ElegantOTA.loop();
@@ -308,6 +314,29 @@ void loop() {
     check_wifi_connection();
   }
   
+  // Send periodic status report
+  if (millis() - last_status_report > 60000) { // Every minute
+    last_status_report = millis();
+    uptime = millis() / 1000; // Convert to seconds
+    
+    #if ENABLE_MQTT
+    if (wifi_connected && mqtt.connected()) {
+      char statusMsg[150];
+      sprintf(statusMsg, 
+              "Uptime: %lu sec, Free RAM: %lu bytes, SD: %s, Total samples: %lu",
+              uptime, ESP.getFreeHeap(), sd_initialized ? "OK" : "ERROR", total_samples);
+      publish_log("SYSTEM", statusMsg, "status");
+      
+      // Additional battery status
+      float voltage = get_adc_data_in_V();
+      float current = get_adc_data_in_A();
+      char batteryMsg[100];
+      sprintf(batteryMsg, "Battery voltage: %.2fV, Current: %.3fA", voltage, current);
+      publish_log("BATTERY", batteryMsg, "status");
+    }
+    #endif
+  }
+  
   // Check if SD card is still present and working
   if (millis() - last_sd_check > 10000) { // Check every 10 seconds
     last_sd_check = millis();
@@ -317,18 +346,27 @@ void loop() {
     bool sd_ok = root.open("/");
     if (sd_ok) {
       root.close();
-      sd_initialized = true;
-    } else {
-      sd_initialized = false;
-      Serial.println("WARNING: SD card check failed!");
-      
-      #if ENABLE_MQTT
-      if (wifi_connected && mqtt.connected()) {
-        publish_error("SD_CARD", "SD card check failed, reinitializing");
+      if (!sd_initialized) {
+        sd_initialized = true;
+        #if ENABLE_MQTT
+        if (wifi_connected && mqtt.connected()) {
+          publish_log("SD_CHECK", "SD card detected and working", "success");
+        }
+        #endif
       }
-      #endif
-      
-      init_sd_card();
+    } else {
+      if (sd_initialized) {
+        sd_initialized = false;
+        Serial.println("WARNING: SD card check failed!");
+        
+        #if ENABLE_MQTT
+        if (wifi_connected && mqtt.connected()) {
+          publish_error("SD_CHECK", "SD card check failed, reinitializing");
+        }
+        #endif
+        
+        init_sd_card();
+      }
     }
   }
   
@@ -351,6 +389,9 @@ void loop() {
                   data_in_volts, data_in_amps, 
                   wifi_connected ? "Connected" : "Disconnected",
                   sd_initialized ? "OK" : "Error");
+      
+      // Track total samples processed
+      total_samples++;
       
       // Write data to SD card files if SD is working
       if (sd_initialized) {
@@ -403,6 +444,15 @@ void loop() {
   Serial.printf("Date: %02d-%02d-%04d  Time: %02d:%02d:%02d\n", 
     now.day(), now.month(), now.year(), 
     now.hour(), now.minute(), now.second());
+  
+  #if ENABLE_MQTT
+  if (wifi_connected && mqtt.connected()) {
+    char cycleMsg[100];
+    sprintf(cycleMsg, "Completed full minute cycle with 60 samples at %02d:%02d:%02d",
+            now.hour(), now.minute(), now.second());
+    publish_log("DATA_CYCLE", cycleMsg, "success");
+  }
+  #endif
   
   // Reset counter for the next minute
   count = 0;
@@ -480,6 +530,16 @@ void write_file(float data, int count, String filnamn) {
   Serial.print(" | Count: ");
   Serial.println(count);
   
+  // MQTT log for write attempt
+  #if ENABLE_MQTT
+  if (wifi_connected && mqtt.connected() && (count == 0 || count % 15 == 0)) {
+    char logMsg[100];
+    sprintf(logMsg, "Writing %s%.3f to %s (sample %d)", 
+            filnamn.c_str(), data, filename, count);
+    publish_log("SD_WRITE", logMsg, "attempt");
+  }
+  #endif
+  
   // Open file in append mode - use O_WRITE flag which is more reliable
   if (!file.open(filename, O_WRITE | O_CREAT | O_APPEND)) {
     char errorMsg[100];
@@ -508,6 +568,16 @@ void write_file(float data, int count, String filnamn) {
     file.println();
     file.print(timestamp);
     file.print(" --> ");
+    
+    // Log successful timestamp write
+    #if ENABLE_MQTT
+    if (wifi_connected && mqtt.connected()) {
+      char logMsg[100];
+      sprintf(logMsg, "Started new minute entry with timestamp %s in %s", 
+              timestamp, filename);
+      publish_log("SD_WRITE", logMsg, "success");
+    }
+    #endif
   }
   
   // Write data value with comma separator (except for last value)
@@ -521,14 +591,23 @@ void write_file(float data, int count, String filnamn) {
     // End the line on the last sample of the minute
     file.print(dataStr);
     file.println();
+    
+    // Log completed minute
+    #if ENABLE_MQTT
+    if (wifi_connected && mqtt.connected()) {
+      char logMsg[100];
+      sprintf(logMsg, "Completed full minute of data (%d samples) in %s", 
+              count + 1, filename);
+      publish_log("SD_WRITE", logMsg, "success");
+    }
+    #endif
   }
   
   // Close the file to ensure data is saved
-  // This is critical for preventing data loss
   file.close();
   
   // Simple verification - check if file exists and print its size
-  if (count == 0 || count == 59) {
+  if (count == 0 || count == 59 || count % 15 == 0) { // Check at beginning, end, and periodically
     if (sd.exists(filename)) {
       uint32_t fileSize = 0;
       if (file.open(filename, O_RDONLY)) {
@@ -538,6 +617,16 @@ void write_file(float data, int count, String filnamn) {
         char sizeMsg[50];
         sprintf(sizeMsg, "File %s size: %lu bytes", filename, fileSize);
         Serial.println(sizeMsg);
+        
+        // Log file size via MQTT
+        #if ENABLE_MQTT
+        if (wifi_connected && mqtt.connected()) {
+          char logMsg[100];
+          sprintf(logMsg, "Verified file %s exists, size: %lu bytes", 
+                  filename, fileSize);
+          publish_log("SD_VERIFY", logMsg, "success");
+        }
+        #endif
         
         if (fileSize == 0) {
           #if ENABLE_MQTT
@@ -556,6 +645,15 @@ void write_file(float data, int count, String filnamn) {
       #endif
     }
   }
+  
+  // Send a consolidated success message after several writes
+  #if ENABLE_MQTT
+  if (wifi_connected && mqtt.connected() && count % 10 == 0 && count > 0) {
+    char logMsg[100];
+    sprintf(logMsg, "Successfully written %d samples to %s", count, filename);
+    publish_log("SD_WRITE", logMsg, "success");
+  }
+  #endif
 }
 
 /**
@@ -773,27 +871,64 @@ String get_file_size(size_t bytes) {
 bool connect_mqtt() {
   if (!wifi_connected) return false;
   
+  // Only try connecting if not already connected
+  if (mqtt.connected()) return true;
+  
+  Serial.print("Attempting MQTT connection...");
+  
+  // Log connection attempt
+  publish_log("MQTT", "Attempting to connect to MQTT broker", "info");
+  
   // Loop until we're connected
   int attempts = 0;
   while (!mqtt.connected() && attempts < 3) {
-    Serial.print("Attempting MQTT connection...");
+    // Create unique ID using ESP32's MAC address
+    char clientId[50];
+    sprintf(clientId, "ESP32_BMS_%llX", ESP.getEfuseMac());
     
     // Attempt to connect with last will message for status
-    if (mqtt.connect(mqtt_client_id, mqtt_user, mqtt_pass, 
-                    mqtt_topic_status, 0, false, "{\"status\":\"offline\"}")) {
+    if (mqtt.connect(clientId, mqtt_user, mqtt_pass, 
+                    mqtt_topic_status, 0, true, "{\"status\":\"offline\",\"reason\":\"unexpected_disconnect\"}")) {
       Serial.println("connected");
       
       // Once connected, publish an online status message
-      String status_message = "{\"status\":\"online\",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
-      mqtt.publish(mqtt_topic_status, status_message.c_str(), true);
+      char ipAddress[20];
+      WiFi.localIP().toString().toCharArray(ipAddress, sizeof(ipAddress));
+      
+      char statusMsg[250];
+      sprintf(statusMsg, 
+              "{\"status\":\"online\",\"ip\":\"%s\",\"rssi\":%d,\"id\":\"%s\",\"free_memory\":%lu,\"version\":\"1.0\"}",
+              ipAddress, WiFi.RSSI(), clientId, ESP.getFreeHeap());
+      
+      mqtt.publish(mqtt_topic_status, statusMsg, true);
+      
+      // Publish a welcome message on log topic
+      char welcomeMsg[100];
+      sprintf(welcomeMsg, "Connected to MQTT broker at %s:%d as %s", 
+              mqtt_server, mqtt_port, clientId);
+      publish_log("MQTT", welcomeMsg, "success");
+      
       return true;
     } else {
+      int state = mqtt.state();
       Serial.print("failed, rc=");
-      Serial.print(mqtt.state());
+      Serial.print(state);
       Serial.println(" try again in 2 seconds");
+      
+      // Publish error about connection failure
+      char errorMsg[100];
+      sprintf(errorMsg, "Connection failed with error code %d", state);
+      
+      // Can't use publish_error because we're not connected yet
+      Serial.println(errorMsg);
+      
       delay(2000);
       attempts++;
     }
+  }
+  
+  if (attempts >= 3) {
+    Serial.println("Failed to connect to MQTT broker after 3 attempts");
   }
   
   return false;
@@ -868,6 +1003,36 @@ void publish_error(const char* error_source, const char* error_message) {
     Serial.println("Failed to publish error message");
   } else {
     Serial.println("Error message published to MQTT successfully");
+  }
+  
+  // Process any incoming messages
+  mqtt.loop();
+}
+
+void publish_log(const char* source, const char* message, const char* status = "info") {
+  if (!mqtt.connected()) return;
+  
+  // Create JSON-like message with timestamp and values
+  char buffer[250];
+  sprintf(buffer, 
+          "{\"timestamp\":\"%04d-%02d-%02d %02d:%02d:%02d\",\"source\":\"%s\",\"message\":\"%s\",\"status\":\"%s\"}", 
+          rtc.now().year(), rtc.now().month(), rtc.now().day(),
+          rtc.now().hour(), rtc.now().minute(), rtc.now().second(),
+          source, message, status);
+  
+  // Publish log message to log topic
+  int retries = 0;
+  while (!mqtt.publish(mqtt_topic_log, buffer) && retries < 3) {
+    Serial.println("Failed to publish log message, retrying...");
+    delay(100);
+    mqtt.loop();
+    retries++;
+  }
+  
+  if (retries >= 3) {
+    Serial.println("Failed to publish log message");
+  } else {
+    Serial.println("Log message published to MQTT successfully");
   }
   
   // Process any incoming messages
@@ -970,13 +1135,19 @@ void move_arrow(int dir, float amps) {
 bool init_sd_card() {
   Serial.println("Initializing SD card...");
   
+  #if ENABLE_MQTT
+  if (wifi_connected && mqtt.connected()) {
+    publish_log("SD_INIT", "Starting SD card initialization", "info");
+  }
+  #endif
+  
   // Try to initialize the SD card using the most basic method
   if (!sd.begin(chipSelect, SPI_HALF_SPEED)) {
     Serial.println("ERROR: SD card initialization failed!");
     
     #if ENABLE_MQTT
     if (wifi_connected && mqtt.connected()) {
-      publish_error("SD_CARD", "SD card initialization failed");
+      publish_error("SD_INIT", "SD card initialization failed");
     }
     #endif
     
@@ -985,6 +1156,29 @@ bool init_sd_card() {
   }
   
   Serial.println("SD card initialized successfully");
+  
+  #if ENABLE_MQTT
+  if (wifi_connected && mqtt.connected()) {
+    publish_log("SD_INIT", "SD card initialized successfully", "success");
+  }
+  #endif
+  
+  // Get SD card info for logging
+  #if ENABLE_MQTT
+  if (wifi_connected && mqtt.connected()) {
+    // Get card info (will vary depending on SdFat version, this is a simpler approach)
+    bool isSDHC = false;
+    if (sd.card()->type() == SD_CARD_TYPE_SDHC) {
+      isSDHC = true;
+    }
+    
+    char cardInfo[100];
+    sprintf(cardInfo, "Card Type: %s, FAT%d initialized", 
+            isSDHC ? "SDHC" : "SD", 
+            isSDHC ? 32 : 16);
+    publish_log("SD_INFO", cardInfo, "info");
+  }
+  #endif
   
   // Try to create a test file to verify write capability
   SdFile testFile;
@@ -1005,6 +1199,86 @@ bool init_sd_card() {
     testFile.close();
     
     Serial.println("Test file written successfully");
+    
+    #if ENABLE_MQTT
+    if (wifi_connected && mqtt.connected()) {
+      publish_log("SD_TEST", "Test file written successfully with timestamp", "success");
+    }
+    #endif
+    
+    // Check if test file exists and has content
+    if (testFile.open("SDTEST.TXT", O_READ)) {
+      uint32_t fileSize = testFile.fileSize();
+      testFile.close();
+      
+      char sizeMsg[50];
+      sprintf(sizeMsg, "Test file size: %lu bytes", fileSize);
+      Serial.println(sizeMsg);
+      
+      #if ENABLE_MQTT
+      if (wifi_connected && mqtt.connected()) {
+        publish_log("SD_TEST", sizeMsg, "success");
+      }
+      #endif
+    } else {
+      Serial.println("WARNING: Could not verify test file!");
+      
+      #if ENABLE_MQTT
+      if (wifi_connected && mqtt.connected()) {
+        publish_log("SD_TEST", "Could not verify test file after writing", "warning");
+      }
+      #endif
+    }
+    
+    // List files in root directory
+    SdFile root;
+    SdFile file;
+    
+    if (root.open("/")) {
+      Serial.println("Files on SD card:");
+      
+      #if ENABLE_MQTT
+      if (wifi_connected && mqtt.connected()) {
+        publish_log("SD_FILES", "Listing files in root directory", "info");
+      }
+      #endif
+      
+      int fileCount = 0;
+      
+      while (file.openNext(&root, O_READ)) {
+        char fileName[64];
+        file.getName(fileName, sizeof(fileName));
+        fileCount++;
+        
+        uint32_t fileSize = file.fileSize();
+        file.close();
+        
+        Serial.print("  ");
+        Serial.print(fileName);
+        Serial.print(" (");
+        Serial.print(fileSize);
+        Serial.println(" bytes)");
+        
+        #if ENABLE_MQTT
+        if (wifi_connected && mqtt.connected() && fileCount <= 5) { // Limit to first 5 files to avoid flooding
+          char fileInfo[100];
+          sprintf(fileInfo, "File: %s, Size: %lu bytes", fileName, fileSize);
+          publish_log("SD_FILES", fileInfo, "info");
+        }
+        #endif
+      }
+      
+      #if ENABLE_MQTT
+      if (wifi_connected && mqtt.connected()) {
+        char countMsg[50];
+        sprintf(countMsg, "Found %d files on SD card", fileCount);
+        publish_log("SD_FILES", countMsg, "info");
+      }
+      #endif
+      
+      root.close();
+    }
+    
     sd_initialized = true;
     return true;
   } else {
@@ -1012,7 +1286,7 @@ bool init_sd_card() {
     
     #if ENABLE_MQTT
     if (wifi_connected && mqtt.connected()) {
-      publish_error("SD_CARD", "Could not create test file during initialization");
+      publish_error("SD_TEST", "Could not create test file during initialization");
     }
     #endif
     
