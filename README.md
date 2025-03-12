@@ -28,7 +28,12 @@
 <p align="center">
   <img src="https://github.com/user-attachments/assets/5f308408-5da9-487b-b2f8-30014f531c52" width="90%" alt="OLED Display"/>
   <br>
-  <em>On-device OLED display showing current battery status</em>
+  <em>Plotted data</em>
+</p>
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/5f308408-5da9-487b-b2f8-30014f531c52" width="90%" alt="OLED Display"/>
+  <br>
+  <em>Plotted data</em>
 </p>
 
 ---
@@ -37,7 +42,7 @@
 
 - **📊 High-Precision Measurements**: Uses ADS1115 16-bit ADC for accurate voltage and current readings
 - **💾 Data Logging**: Automatically records measurements to SD card with timestamps
-- **🌐 Web Interface**: Access and download logged data files via browser without removing SD card
+- **🌐 Enhanced Web Interface**: Access, view, and manage data files with improved file browser and deletion capabilities
 - **📡 Real-Time MQTT**: Publishes data points to MQTT broker for remote monitoring
 - **🔄 OTA Updates**: Update firmware wirelessly through web interface
 - **📱 Optional Display**: OLED display support for direct status viewing (configurable)
@@ -111,10 +116,15 @@
 - Data files are named `Amps YYYY-MM-DD.txt` and `Volts YYYY-MM-DD.txt`
 - Each line contains timestamped measurements in the format `HH:MM:SS --> value1, value2, ...`
 
-### 🌐 Web Interface
+### 🌐 Improved Web Interface
 1. Connect to the same WiFi network as ESP32
-2. Navigate to `http://<ESP32_IP_ADDRESS>/getdata`
-3. Browse and download data files directly through your browser
+2. Navigate to `http://<ESP32_IP_ADDRESS>/` to access the file browser
+3. Features:
+   - **View Files**: Click the "View" button to see file contents directly in browser
+   - **Delete Files**: Safely remove files with confirmation dialog
+   - **Directory Navigation**: Browse folders with intuitive path display
+   - **File Information**: See file sizes in human-readable format
+   - **Quick Access**: One-click access to OTA updates with prominent button
 4. Access OTA update page at `http://<ESP32_IP_ADDRESS>/update`
 
 ### 📡 MQTT Monitoring
