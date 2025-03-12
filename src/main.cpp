@@ -95,6 +95,7 @@ const char* mqtt_client_id = "ESP32_BatteryMonitor";
 const char* mqtt_topic_current = "battery/data/current";
 const char* mqtt_topic_voltage = "battery/data/voltage";
 const char* mqtt_topic_status = "battery/status";
+const char* mqtt_topic_error = "battery/error";  // New topic for error messages
 #endif
 
 // Timing settings
@@ -133,6 +134,11 @@ int i = 1;
 bool wifi_connected = false;
 unsigned long last_wifi_attempt = 0;
 
+// SD card monitoring
+unsigned long last_sd_check = 0;
+bool sd_initialized = false;
+unsigned long last_data_written = 0;
+
 // ===== FUNCTION DECLARATIONS =====
 // OTA callback functions
 void onOTAStart();
@@ -150,6 +156,7 @@ void check_wifi_connection();            // Check and attempt to reconnect WiFi
 #if ENABLE_MQTT
 bool connect_mqtt();                     // Connect to MQTT broker
 void publish_data_point(float current, float voltage, DateTime timestamp); // Publish single data point
+void publish_error(const char* error_source, const char* error_message); // Publish error message
 #endif
 
 // Web server functions
@@ -162,6 +169,10 @@ String get_file_size(String filename);   // Get file size as string
 void interface(float amps, int dir);  // Update display interface
 void move_arrow(int dir, float amps); // Animate the direction arrow
 #endif
+
+// SD card functions
+bool init_sd_card();
+bool check_sd_card();
 
 // ===== OTA CALLBACK IMPLEMENTATIONS =====
 /**
@@ -243,12 +254,10 @@ void setup() {
   Serial.printf("%02d:%02d:%02d\n", time.hour(), time.minute(), time.second());
 
   // Initialize SD card
-  Serial.println("Initializing SD card...");
-  if (!sd.begin(chipSelect, SPI_HALF_SPEED)) {
-    Serial.println("ERROR: SD card initialization failed!");
-    sd.initErrorHalt();
+  if (!init_sd_card()) {
+    // SD card initialization failed
+    Serial.println("ERROR: SD card failed to initialize! Some functions will be disabled.");
   }
-  Serial.println("SD card initialized successfully");
 
   // Setup web server for file browsing and OTA updates
   setup_web_server();
@@ -281,8 +290,6 @@ void setup() {
   Serial.println("Setup complete!");
 }
 
-
-
 int previous_time = 0;
 int time_now = 0;
 
@@ -301,62 +308,93 @@ void loop() {
     check_wifi_connection();
   }
   
+  // Check if SD card is still present and working
+  if (millis() - last_sd_check > 10000) { // Check every 10 seconds
+    last_sd_check = millis();
+    
+    // Simple SD card test - try to open root directory
+    SdFile root;
+    bool sd_ok = root.open("/");
+    if (sd_ok) {
+      root.close();
+      sd_initialized = true;
+    } else {
+      sd_initialized = false;
+      Serial.println("WARNING: SD card check failed!");
+      
+      #if ENABLE_MQTT
+      if (wifi_connected && mqtt.connected()) {
+        publish_error("SD_CARD", "SD card check failed, reinitializing");
+      }
+      #endif
+      
+      init_sd_card();
+    }
+  }
+  
   // Collect and log data every minute (60 samples at ~1 second intervals)
   while (count < 60) {
-
-     //if one seconds passed then run the data logging, else wait until one second
+    //if one seconds passed then run the data logging, else wait until one second
     time_now = millis();
     if((time_now - previous_time) >= 1000){
-              previous_time = millis();
+      previous_time = millis();
 
-
-              // Read voltage and current values
-              float data_in_amps = get_adc_data_in_A();
-              float data_in_volts = get_adc_data_in_V();
-              
-              // Get current time
-              DateTime timestamp = rtc.now();
-              
-              // Display readings on serial monitor
-              Serial.printf("Volts: %.2fV | Amps: %.2fA | WiFi: %s\n", 
-                          data_in_volts, data_in_amps, wifi_connected ? "Connected" : "Disconnected");
-              
-              // Write data to SD card files
-              // Files are named "Amps YYYY-MM-DD.txt" and "Volts YYYY-MM-DD.txt"
-              write_file(data_in_amps, count, "Amps ");
-              write_file(data_in_volts, count, "Volts ");
-              
-              // Send data to MQTT if connected
-              #if ENABLE_MQTT
-              if (wifi_connected && mqtt.connected()) {
-                publish_data_point(data_in_amps, data_in_volts, timestamp);
-              } else if (wifi_connected && !mqtt.connected()) {
-                // Try to reconnect to MQTT if WiFi is connected but MQTT is not
-                connect_mqtt();
-              }
-              // Keep MQTT client connection alive
-              if (mqtt.connected()) {
-                mqtt.loop();
-              }
-              #endif
-              
-              #if ENABLE_DISPLAY
-                  // Update the display with current readings
-                  // Determine current direction (charging or discharging)
-                  if (data_in_amps < 0) {
-                    direction = RIGHT; // Charging
-                  } else {
-                    direction = LEFT;  // Discharging
-                  }
-                  
-                  // Update display interface with current values and direction
-                  interface(data_in_amps, direction);
-              #endif
-              
-              // Wait approximately 1 second before next sample
-              // delay(980); // Adjusted for code execution time
-              count++;
-
+      // Read voltage and current values
+      float data_in_amps = get_adc_data_in_A();
+      float data_in_volts = get_adc_data_in_V();
+      
+      // Get current time
+      DateTime timestamp = rtc.now();
+      
+      // Display readings on serial monitor
+      Serial.printf("Volts: %.2fV | Amps: %.2fA | WiFi: %s | SD: %s\n", 
+                  data_in_volts, data_in_amps, 
+                  wifi_connected ? "Connected" : "Disconnected",
+                  sd_initialized ? "OK" : "Error");
+      
+      // Write data to SD card files if SD is working
+      if (sd_initialized) {
+        // Files are named "Amps YYYY-MM-DD.txt" and "Volts YYYY-MM-DD.txt"
+        write_file(data_in_amps, count, "Amps ");
+        write_file(data_in_volts, count, "Volts ");
+      } else {
+        Serial.println("Skipping data logging - SD card not available");
+        
+        #if ENABLE_MQTT
+        if (wifi_connected && mqtt.connected() && (count % 10 == 0)) { // Report every 10th sample to avoid flooding
+          publish_error("SD_CARD", "Skipping data logging - SD card not available");
+        }
+        #endif
+      }
+      
+      // Send data to MQTT if connected
+      #if ENABLE_MQTT
+      if (wifi_connected && mqtt.connected()) {
+        publish_data_point(data_in_amps, data_in_volts, timestamp);
+      } else if (wifi_connected && !mqtt.connected()) {
+        // Try to reconnect to MQTT if WiFi is connected but MQTT is not
+        connect_mqtt();
+      }
+      // Keep MQTT client connection alive
+      if (mqtt.connected()) {
+        mqtt.loop();
+      }
+      #endif
+      
+      #if ENABLE_DISPLAY
+          // Update the display with current readings
+          // Determine current direction (charging or discharging)
+          if (data_in_amps < 0) {
+            direction = RIGHT; // Charging
+          } else {
+            direction = LEFT;  // Discharging
+          }
+          
+          // Update display interface with current values and direction
+          interface(data_in_amps, direction);
+      #endif
+      
+      count++;
     }
   }
 
@@ -419,39 +457,105 @@ void write_file(float data, int count, String filnamn) {
   // Get current date/time
   DateTime time = rtc.now();
   
-  // Create filename with date: "Prefix YYYY-MM-DD.txt"
-  String date = time.timestamp(DateTime::TIMESTAMP_DATE);
-  String txt = ".txt";
-  String filename_merged = filnamn + date + txt;
-  
-  // Convert to char array for SD library
-  char filename[filename_merged.length() + 1];
-  filename_merged.toCharArray(filename, sizeof(filename));
-  
-  // Open file for append
-  if (!file.open(filename, O_RDWR | O_CREAT | O_AT_END)) {
-    sd.errorHalt("ERROR: Failed to open file for writing");
+  // Check if RTC has a valid time (year 2000+ is considered valid)
+  if (time.year() < 2000) {
+    Serial.println("ERROR: RTC time is invalid. Skipping data write.");
+    #if ENABLE_MQTT
+    if (wifi_connected && mqtt.connected()) {
+      publish_error("RTC", "Invalid RTC time, data logging skipped");
+    }
+    #endif
+    return;
   }
+  
+  // Create filename with date: "Prefix YYYY-MM-DD.txt"
+  char filename[50]; // Use fixed size buffer for safety
+  sprintf(filename, "%s%04d-%02d-%02d.txt", 
+          filnamn.c_str(), time.year(), time.month(), time.day());
+  
+  Serial.print("Writing to file: ");
+  Serial.print(filename);
+  Serial.print(" | Value: ");
+  Serial.print(data);
+  Serial.print(" | Count: ");
+  Serial.println(count);
+  
+  // Open file in append mode - use O_WRITE flag which is more reliable
+  if (!file.open(filename, O_WRITE | O_CREAT | O_APPEND)) {
+    char errorMsg[100];
+    sprintf(errorMsg, "Failed to open file: %s", filename);
+    Serial.println(errorMsg);
+    
+    #if ENABLE_MQTT
+    if (wifi_connected && mqtt.connected()) {
+      publish_error("SD_WRITE", errorMsg);
+    }
+    #endif
+    return;
+  }
+  
+  // Go to the end of the file
+  file.seekEnd();
   
   // Start a new line with timestamp at the beginning of each minute
   if (count == 0) {
+    // Write a timestamp in standard format
+    char timestamp[15];
+    sprintf(timestamp, "%02d:%02d:%02d", 
+            time.hour(), time.minute(), time.second());
+    
+    // Print newline then timestamp
     file.println();
-    file.print(time.timestamp(DateTime::TIMESTAMP_TIME));
+    file.print(timestamp);
     file.print(" --> ");
   }
   
   // Write data value with comma separator (except for last value)
+  char dataStr[20]; // Buffer for the data value
+  dtostrf(data, 7, 3, dataStr); // Convert float to string with 3 decimal places
+  
   if (count < 59) {
-    file.print(data);
+    file.print(dataStr);
     file.print(", ");
   } else {
     // End the line on the last sample of the minute
-    file.print(data);
+    file.print(dataStr);
     file.println();
   }
   
   // Close the file to ensure data is saved
+  // This is critical for preventing data loss
   file.close();
+  
+  // Simple verification - check if file exists and print its size
+  if (count == 0 || count == 59) {
+    if (sd.exists(filename)) {
+      uint32_t fileSize = 0;
+      if (file.open(filename, O_RDONLY)) {
+        fileSize = file.fileSize();
+        file.close();
+        
+        char sizeMsg[50];
+        sprintf(sizeMsg, "File %s size: %lu bytes", filename, fileSize);
+        Serial.println(sizeMsg);
+        
+        if (fileSize == 0) {
+          #if ENABLE_MQTT
+          if (wifi_connected && mqtt.connected()) {
+            publish_error("SD_WRITE", "File exists but is empty after write");
+          }
+          #endif
+        }
+      }
+    } else {
+      Serial.println("ERROR: File does not exist after writing!");
+      #if ENABLE_MQTT
+      if (wifi_connected && mqtt.connected()) {
+        publish_error("SD_WRITE", "File does not exist after write operation");
+      }
+      #endif
+    }
+  }
 }
 
 /**
@@ -739,6 +843,36 @@ void publish_data_point(float current, float voltage, DateTime timestamp) {
   // Process any incoming messages
   mqtt.loop();
 }
+
+void publish_error(const char* error_source, const char* error_message) {
+  if (!mqtt.connected()) return;
+  
+  // Create JSON-like message with timestamp and values
+  char buffer[250];
+  sprintf(buffer, 
+          "{\"timestamp\":\"%04d-%02d-%02d %02d:%02d:%02d\",\"error_source\":\"%s\",\"error_message\":\"%s\"}", 
+          rtc.now().year(), rtc.now().month(), rtc.now().day(),
+          rtc.now().hour(), rtc.now().minute(), rtc.now().second(),
+          error_source, error_message);
+  
+  // Publish error message to error topic
+  int retries = 0;
+  while (!mqtt.publish(mqtt_topic_error, buffer) && retries < 3) {
+    Serial.println("Failed to publish error message, retrying...");
+    delay(100);
+    mqtt.loop();
+    retries++;
+  }
+  
+  if (retries >= 3) {
+    Serial.println("Failed to publish error message");
+  } else {
+    Serial.println("Error message published to MQTT successfully");
+  }
+  
+  // Process any incoming messages
+  mqtt.loop();
+}
 #endif
 
 #if ENABLE_DISPLAY
@@ -828,5 +962,63 @@ void move_arrow(int dir, float amps) {
   }
 }
 #endif
+
+/**
+ * Initialize the SD card
+ * @return true if successful, false otherwise
+ */
+bool init_sd_card() {
+  Serial.println("Initializing SD card...");
+  
+  // Try to initialize the SD card using the most basic method
+  if (!sd.begin(chipSelect, SPI_HALF_SPEED)) {
+    Serial.println("ERROR: SD card initialization failed!");
+    
+    #if ENABLE_MQTT
+    if (wifi_connected && mqtt.connected()) {
+      publish_error("SD_CARD", "SD card initialization failed");
+    }
+    #endif
+    
+    sd_initialized = false;
+    return false;
+  }
+  
+  Serial.println("SD card initialized successfully");
+  
+  // Try to create a test file to verify write capability
+  SdFile testFile;
+  if (testFile.open("SDTEST.TXT", O_WRITE | O_CREAT | O_TRUNC)) {
+    // Write some test data
+    testFile.println("SD card test file");
+    testFile.println("Last initialization time:");
+    
+    // Add current timestamp
+    DateTime now = rtc.now();
+    char timestamp[25];
+    sprintf(timestamp, "%04d-%02d-%02d %02d:%02d:%02d", 
+            now.year(), now.month(), now.day(),
+            now.hour(), now.minute(), now.second());
+    testFile.println(timestamp);
+    
+    // Close file to flush data
+    testFile.close();
+    
+    Serial.println("Test file written successfully");
+    sd_initialized = true;
+    return true;
+  } else {
+    Serial.println("ERROR: Could not create test file!");
+    
+    #if ENABLE_MQTT
+    if (wifi_connected && mqtt.connected()) {
+      publish_error("SD_CARD", "Could not create test file during initialization");
+    }
+    #endif
+    
+    sd_initialized = false;
+    return false;
+  }
+}
 
 
