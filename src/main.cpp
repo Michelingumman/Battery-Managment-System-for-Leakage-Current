@@ -695,13 +695,8 @@ void check_wifi_connection() {
  * Setup web server routes for file browsing and download
  */
 void setup_web_server() {
-  // Root page - redirects to getdata
+  // Root page - serve file browser directly instead of redirecting
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->redirect("/getdata");
-  });
-
-  // Data browser page
-  server.on("/getdata", HTTP_GET, [](AsyncWebServerRequest *request){
     String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<title>Battery Monitor Data Files</title>";
     html += "<style>";
@@ -713,8 +708,9 @@ void setup_web_server() {
     html += "a:hover{text-decoration:underline;}";
     html += ".file-actions{display:flex;gap:10px;}";
     html += ".btn{border:none;border-radius:4px;padding:6px 12px;cursor:pointer;font-weight:bold;text-align:center;text-decoration:none;}";
-    html += ".btn-download{background-color:#28a745;color:white;}";
+    html += ".btn-view{background-color:#28a745;color:white;}";
     html += ".btn-delete{background-color:#dc3545;color:white;}";
+    html += ".btn-update{background-color:#007bff;color:white;margin:0 auto;display:block;width:200px;}";
     html += ".btn:hover{opacity:0.9;}";
     html += ".header{background-color:#343a40;color:white;padding:20px;border-radius:8px;margin-bottom:20px;}";
     html += "hr{border:0;height:1px;background-color:#ddd;margin:20px 0;}";
@@ -729,7 +725,8 @@ void setup_web_server() {
     html += "<script>";
     html += "function confirmDelete(filename) {";
     html += "  document.getElementById('file-to-delete').textContent = filename;";
-    html += "  document.getElementById('delete-form').action = '/delete?file=' + encodeURIComponent(filename);";
+    html += "  document.getElementById('delete-form').action = '/delete';"; // Changed to use form input instead of URL parameter
+    html += "  document.getElementById('file-input').value = filename;";
     html += "  document.getElementById('delete-modal').style.display = 'flex';";
     html += "}";
     html += "function closeModal() {";
@@ -751,7 +748,7 @@ void setup_web_server() {
     }
     
     html += "<div class='path-nav'>";
-    html += "<a href='/getdata?dir=/'>[Root Directory]</a> | Current Path: " + path;
+    html += "<a href='/?dir=/'>[Root Directory]</a> | Current Path: " + path;
     html += "</div>";
     
     html += "<h2>Files</h2>";
@@ -759,7 +756,7 @@ void setup_web_server() {
     
     html += "<hr>";
     html += "<div class='footer'>";
-    html += "<p><a href='/update' class='btn btn-download'>OTA Update</a></p>";
+    html += "<a href='/update' class='btn btn-update'>OTA Update</a>";
     html += "<p>ESP32 Battery Management System | IP: " + WiFi.localIP().toString() + "</p>";
     html += "</div>";
     
@@ -771,7 +768,8 @@ void setup_web_server() {
     html += "<p><strong id='file-to-delete'></strong>?</p>";
     html += "<p>This action cannot be undone.</p>";
     html += "<div class='modal-buttons'>";
-    html += "<form id='delete-form' method='get' action='/delete'>";
+    html += "<form id='delete-form' method='post' action='/delete'>";
+    html += "<input type='hidden' id='file-input' name='file' value=''>";
     html += "<button type='submit' class='btn btn-delete'>Delete</button>";
     html += "</form>";
     html += "<button onclick='closeModal()' class='btn'>Cancel</button>";
@@ -782,7 +780,17 @@ void setup_web_server() {
     request->send(200, "text/html", html);
   });
 
-  // File download handler
+  // Old path /getdata now redirects to root
+  server.on("/getdata", HTTP_GET, [](AsyncWebServerRequest *request){
+    // Preserve any query parameters
+    String queryString = "";
+    if(request->hasParam("dir")) {
+      queryString = "?dir=" + request->getParam("dir")->value();
+    }
+    request->redirect("/" + queryString);
+  });
+
+  // File view/download handler
   server.on("/download", HTTP_GET, [](AsyncWebServerRequest *request){
     if(request->hasParam("file")) {
       String filepath = request->getParam("file")->value();
@@ -833,10 +841,10 @@ void setup_web_server() {
     }
   });
   
-  // File deletion handler
-  server.on("/delete", HTTP_GET, [](AsyncWebServerRequest *request){
-    if(request->hasParam("file")) {
-      String filepath = request->getParam("file")->value();
+  // File deletion handler - change from GET to POST
+  server.on("/delete", HTTP_POST, [](AsyncWebServerRequest *request){
+    if(request->hasParam("file", true)) { // true indicates POST parameter
+      String filepath = request->getParam("file", true)->value();
       
       // Check if file exists
       SdFile deleteFile;
@@ -859,10 +867,10 @@ void setup_web_server() {
         // Delete the file
         if(sd.remove(filepath.c_str())) {
           // Redirect to the directory view with success message
-          request->redirect("/getdata?dir=" + path + "&msg=File+" + filename + "+deleted+successfully");
+          request->redirect("/?dir=" + path + "&msg=File+" + filename + "+deleted+successfully");
         } else {
           // Redirect with error message
-          request->redirect("/getdata?dir=" + path + "&error=Failed+to+delete+" + filename);
+          request->redirect("/?dir=" + path + "&error=Failed+to+delete+" + filename);
         }
       } else {
         request->send(404, "text/plain", "File not found");
@@ -912,7 +920,7 @@ String list_files(String path) {
     }
     
     output += "<li>";
-    output += "<div><a href='/getdata?dir=" + parentPath + "'><strong>[Parent Directory]</strong></a></div>";
+    output += "<div><a href='/?dir=" + parentPath + "'><strong>[Parent Directory]</strong></a></div>";
     output += "<div class='file-actions'></div>"; // Empty actions for parent dir
     output += "</li>";
   }
@@ -932,7 +940,7 @@ String list_files(String path) {
       // Directory entry
       dirCount++;
       output += "<li>";
-      output += "<div><a href='/getdata?dir=" + path + name + "'><strong>[DIR] " + name + "</strong></a></div>";
+      output += "<div><a href='/?dir=" + path + name + "'><strong>[DIR] " + name + "</strong></a></div>";
       output += "<div class='file-actions'></div>"; // Empty actions for directories
       output += "</li>";
     } else {
@@ -944,7 +952,7 @@ String list_files(String path) {
       output += "<li>";
       output += "<div>" + name + " <span style='color:#666;font-size:0.9em;'>(" + sizeStr + ")</span></div>";
       output += "<div class='file-actions'>";
-      output += "<a href='/download?file=" + path + name + "' class='btn btn-download'>Download</a>";
+      output += "<a href='/download?file=" + path + name + "' class='btn btn-view'>View</a>"; // Changed from Download to View
       output += "<a href='javascript:void(0)' onclick='confirmDelete(\"" + path + name + "\")' class='btn btn-delete'>Delete</a>";
       output += "</div>";
       output += "</li>";
