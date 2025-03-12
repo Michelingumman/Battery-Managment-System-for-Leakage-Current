@@ -1,4 +1,4 @@
-/** CREATED BY ADAM AND MATTIAS MICHELIN
+/** CREATED BY ADAM AND MATTIAS MICHELIN in STHLM & Borås
  * 
  * Battery Management System for Leakage Current Monitoring
  * 
