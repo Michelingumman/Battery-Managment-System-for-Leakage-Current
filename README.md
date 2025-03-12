@@ -31,9 +31,9 @@
   <em>Plotted data</em>
 </p>
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/5f308408-5da9-487b-b2f8-30014f531c52" width="90%" alt="OLED Display"/>
+  <img src="https://github.com/user-attachments/assets/fec09316-d2a4-4942-9990-9d82e61ae488" width="90%" alt="OLED Display"/>
   <br>
-  <em>Plotted data</em>
+  <em>Web UI for accessing local SD card with delete and download availability</em>
 </p>
 
 ---
