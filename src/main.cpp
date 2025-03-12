@@ -27,6 +27,8 @@
 #define ENABLE_DISPLAY 0
 // Set to 1 to enable MQTT data upload, 0 to disable
 #define ENABLE_MQTT 1
+// Set to 1 to enable SD card testing mode (writes test data every second)
+#define SD_CARD_TEST_MODE 0
 
 #define UPDATE_RTC_TIME 0
 
@@ -151,7 +153,9 @@ void onOTAEnd(bool success);
 float get_adc_data_in_A();    // Get current reading in Amperes
 float get_adc_data_in_V();    // Get voltage reading in Volts
 void write_file(float data, int count, String filename); // Log data to SD card
+#if SD_CARD_TEST_MODE
 void test_sd_card_write();    // Test function for basic SD card writing
+#endif
 
 // WiFi and MQTT functions
 void check_wifi_connection();            // Check and attempt to reconnect WiFi
@@ -164,7 +168,7 @@ void publish_data_point(float current, float voltage, DateTime timestamp); // Pu
 // Web server functions
 void setup_web_server();                 // Setup web server routes
 String list_files(String path);          // List all files in directory
-String get_file_size(String filename);   // Get file size as string
+String get_file_size(size_t bytes);   // Get file size as string
 
 // Display functions
 #if ENABLE_DISPLAY
@@ -207,6 +211,7 @@ void onOTAEnd(bool success) {
   }
 }
 
+#if SD_CARD_TEST_MODE
 /**
  * Simple test function to verify SD card writing is working
  * Just writes zeros to a test file every second
@@ -272,6 +277,7 @@ void test_sd_card_write() {
     digitalWrite(LED_BUILTIN, LOW);
   }
 }
+#endif
 
 // ===== SETUP FUNCTION =====
 void setup() {
@@ -328,7 +334,13 @@ void setup() {
   Serial.println("Initializing SD card...");
   if (!sd.begin(chipSelect, SPI_HALF_SPEED)) {
     Serial.println("ERROR: SD card initialization failed!");
-    sd.errorHalt();
+    while (1) {
+      // Flash LED to indicate SD card error
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(100);
+    }
   }
   Serial.println("SD card initialized successfully");
 
@@ -347,8 +359,38 @@ void setup() {
   
   // Write initial test data
   testFile.println("SD card test file created at startup");
+  testFile.println("Current time: " + time.timestamp(DateTime::TIMESTAMP_FULL));
   testFile.close();
   Serial.println("Test file created successfully");
+
+  // Verify we can read the file back
+  if (testFile.open("SDTEST.TXT", O_READ)) {
+    size_t fileSize = testFile.fileSize();
+    Serial.print("Test file size: ");
+    Serial.print(fileSize);
+    Serial.println(" bytes");
+    testFile.close();
+    
+    if (fileSize == 0) {
+      Serial.println("ERROR: Test file is empty - write failed!");
+      while (1) {
+        // Flash LED to indicate error
+        digitalWrite(LED_BUILTIN, HIGH);
+        delay(100);
+        digitalWrite(LED_BUILTIN, LOW);
+        delay(100);
+      }
+    }
+  } else {
+    Serial.println("ERROR: Could not read back test file!");
+    while (1) {
+      // Flash LED to indicate error
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(100);
+    }
+  }
 
   // Setup web server for file browsing and OTA updates
   setup_web_server();
@@ -379,7 +421,9 @@ void setup() {
 #endif
 
   Serial.println("Setup complete!");
-  Serial.println("RUNNING IN TEST MODE - Writing 0s to test file every second");
+#if SD_CARD_TEST_MODE
+  Serial.println("RUNNING IN TEST MODE - Writing to test file every second");
+#endif
 }
 
 int previous_time = 0;
@@ -387,6 +431,7 @@ int time_now = 0;
 
 // ===== MAIN LOOP =====
 void loop() {
+#if SD_CARD_TEST_MODE
   // Run the simple SD card write test instead of the normal data collection
   test_sd_card_write();
   
@@ -402,6 +447,83 @@ void loop() {
 
   // A short delay to avoid hammering the loop
   delay(10);
+#else
+  // Handle OTA updates if WiFi connected
+  if (wifi_connected) {
+    ElegantOTA.loop();
+  }
+
+  // Get current date/time
+  DateTime now = rtc.now();
+  
+  // Try to reconnect WiFi periodically if disconnected
+  if (millis() - last_wifi_attempt > WIFI_RETRY_INTERVAL) {
+    check_wifi_connection();
+  }
+  
+  // Collect and log data every minute (60 samples at ~1 second intervals)
+  while (count < 60) {
+    //if one seconds passed then run the data logging, else wait until one second
+    time_now = millis();
+    if((time_now - previous_time) >= 1000){
+      previous_time = millis();
+
+      // Read voltage and current values
+      float data_in_amps = get_adc_data_in_A();
+      float data_in_volts = get_adc_data_in_V();
+              
+      // Get current time
+      DateTime timestamp = rtc.now();
+              
+      // Display readings on serial monitor
+      Serial.printf("Volts: %.2fV | Amps: %.2fA | WiFi: %s\n", 
+                  data_in_volts, data_in_amps, wifi_connected ? "Connected" : "Disconnected");
+              
+      // Write data to SD card files
+      // Files are named "Amps YYYY-MM-DD.txt" and "Volts YYYY-MM-DD.txt"
+      write_file(data_in_amps, count, "Amps ");
+      write_file(data_in_volts, count, "Volts ");
+              
+      // Send data to MQTT if connected
+      #if ENABLE_MQTT
+      if (wifi_connected && mqtt.connected()) {
+        publish_data_point(data_in_amps, data_in_volts, timestamp);
+      } else if (wifi_connected && !mqtt.connected()) {
+        // Try to reconnect to MQTT if WiFi is connected but MQTT is not
+        connect_mqtt();
+      }
+      // Keep MQTT client connection alive
+      if (mqtt.connected()) {
+        mqtt.loop();
+      }
+      #endif
+              
+      #if ENABLE_DISPLAY
+      // Update the display with current readings
+      // Determine current direction (charging or discharging)
+      if (data_in_amps < 0) {
+        direction = RIGHT; // Charging
+      } else {
+        direction = LEFT;  // Discharging
+      }
+                  
+      // Update display interface with current values and direction
+      interface(data_in_amps, direction);
+      #endif
+              
+      count++;
+    }
+  }
+
+  // Log completion of one minute cycle
+  Serial.println("One minute cycle completed");
+  Serial.printf("Date: %02d-%02d-%04d  Time: %02d:%02d:%02d\n", 
+    now.day(), now.month(), now.year(), 
+    now.hour(), now.minute(), now.second());
+  
+  // Reset counter for the next minute
+  count = 0;
+#endif
 }
 
 // ===== DATA COLLECTION FUNCTIONS =====
@@ -462,30 +584,71 @@ void write_file(float data, int count, String filnamn) {
   char filename[filename_merged.length() + 1];
   filename_merged.toCharArray(filename, sizeof(filename));
   
-  // Open file for append
+  // Debug output with filename and count
+  Serial.print("Writing to file: ");
+  Serial.print(filename);
+  Serial.print(" | Value: ");
+  Serial.print(data);
+  Serial.print(" | Count: ");
+  Serial.println(count);
+  
+  // Open file for append - if fails, halt with error
   if (!file.open(filename, O_RDWR | O_CREAT | O_AT_END)) {
-    sd.errorHalt("ERROR: Failed to open file for writing");
+    Serial.print("ERROR: Failed to open file for writing: ");
+    Serial.println(filename);
+    
+    // Try again once
+    if (!sd.begin(chipSelect, SPI_HALF_SPEED)) {
+      Serial.println("ERROR: SD card reinit failed!");
+      return;
+    }
+    
+    // Second attempt after reinitializing
+    if (!file.open(filename, O_RDWR | O_CREAT | O_AT_END)) {
+      Serial.println("ERROR: Still failed to open file after SD reinit!");
+      return;
+    }
+    
+    Serial.println("File opened successfully after SD reinit");
   }
   
   // Start a new line with timestamp at the beginning of each minute
   if (count == 0) {
-    file.println();
-    file.print(time.timestamp(DateTime::TIMESTAMP_TIME));
+    // Use time format HH:MM:SS
+    char timestamp[9]; // HH:MM:SS + null terminator
+    sprintf(timestamp, "%02d:%02d:%02d", 
+            time.hour(), time.minute(), time.second());
+    
+    file.println(); // Start on a new line
+    file.print(timestamp);
     file.print(" --> ");
+    
+    Serial.print("Wrote timestamp: ");
+    Serial.println(timestamp);
   }
 
   // Write data value with comma separator (except for last value)
+  file.print(data);
   if (count < 59) {
-    file.print(data);
     file.print(", ");
   } else {
     // End the line on the last sample of the minute
-    file.print(data);
-    file.println();
+    file.println(); // Important - ensures the line ends properly
   }
 
   // Close the file to ensure data is saved
   file.close();
+  
+  // Verify file exists with size check (only do once per minute to save performance)
+  if (count == 59) {
+    SdFile checkFile;
+    if (checkFile.open(filename, O_READ)) {
+      Serial.print("File size: ");
+      Serial.print(checkFile.fileSize());
+      Serial.println(" bytes");
+      checkFile.close();
+    }
+  }
 }
 
 /**
@@ -541,14 +704,45 @@ void setup_web_server() {
   server.on("/getdata", HTTP_GET, [](AsyncWebServerRequest *request){
     String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<title>Battery Monitor Data Files</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;}h1{color:#333;}ul{list-style-type:none;padding:0;}";
-    html += "li{margin:10px 0;padding:10px;border-radius:4px;background-color:#f2f2f2;}";
+    html += "<style>";
+    html += "body{font-family:Arial,sans-serif;margin:20px;background-color:#f5f5f5;}";
+    html += "h1,h2{color:#333;text-align:center;}";
+    html += "ul{list-style-type:none;padding:0;max-width:800px;margin:0 auto;}";
+    html += "li{margin:10px 0;padding:15px;border-radius:8px;background-color:#fff;box-shadow:0 2px 4px rgba(0,0,0,0.1);display:flex;justify-content:space-between;align-items:center;}";
     html += "a{text-decoration:none;color:#0066cc;display:block;}";
-    html += "a:hover{text-decoration:underline;}</style></head><body>";
-    html += "<h1>Battery Monitor Data Files</h1>";
+    html += "a:hover{text-decoration:underline;}";
+    html += ".file-actions{display:flex;gap:10px;}";
+    html += ".btn{border:none;border-radius:4px;padding:6px 12px;cursor:pointer;font-weight:bold;text-align:center;text-decoration:none;}";
+    html += ".btn-download{background-color:#28a745;color:white;}";
+    html += ".btn-delete{background-color:#dc3545;color:white;}";
+    html += ".btn:hover{opacity:0.9;}";
+    html += ".header{background-color:#343a40;color:white;padding:20px;border-radius:8px;margin-bottom:20px;}";
+    html += "hr{border:0;height:1px;background-color:#ddd;margin:20px 0;}";
+    html += ".footer{text-align:center;padding:10px;color:#666;font-size:0.9em;}";
+    html += ".path-nav{background-color:#e9ecef;padding:10px;border-radius:6px;margin-bottom:15px;text-align:center;}";
+    html += ".confirm-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background-color:rgba(0,0,0,0.5);align-items:center;justify-content:center;}";
+    html += ".modal-content{background-color:white;padding:20px;border-radius:8px;max-width:400px;text-align:center;}";
+    html += ".modal-buttons{display:flex;justify-content:center;gap:10px;margin-top:20px;}";
+    html += "</style>";
     
-    // Add root directory link
-    html += "<p><a href='/getdata?dir=/'>[Root Directory]</a></p>";
+    // Add JavaScript for delete confirmation
+    html += "<script>";
+    html += "function confirmDelete(filename) {";
+    html += "  document.getElementById('file-to-delete').textContent = filename;";
+    html += "  document.getElementById('delete-form').action = '/delete?file=' + encodeURIComponent(filename);";
+    html += "  document.getElementById('delete-modal').style.display = 'flex';";
+    html += "}";
+    html += "function closeModal() {";
+    html += "  document.getElementById('delete-modal').style.display = 'none';";
+    html += "}";
+    html += "</script>";
+    
+    html += "</head><body>";
+    
+    html += "<div class='header'>";
+    html += "<h1>Battery Management System</h1>";
+    html += "<p>Data File Browser</p>";
+    html += "</div>";
     
     // Get directory path from query parameter or use root
     String path = "/";
@@ -556,9 +750,33 @@ void setup_web_server() {
       path = request->getParam("dir")->value();
     }
     
-    html += "<h2>Directory: " + path + "</h2>";
+    html += "<div class='path-nav'>";
+    html += "<a href='/getdata?dir=/'>[Root Directory]</a> | Current Path: " + path;
+    html += "</div>";
+    
+    html += "<h2>Files</h2>";
     html += list_files(path);
-    html += "<hr><p><a href='/update'>OTA Update</a></p>";
+    
+    html += "<hr>";
+    html += "<div class='footer'>";
+    html += "<p><a href='/update' class='btn btn-download'>OTA Update</a></p>";
+    html += "<p>ESP32 Battery Management System | IP: " + WiFi.localIP().toString() + "</p>";
+    html += "</div>";
+    
+    // Add delete confirmation modal
+    html += "<div id='delete-modal' class='confirm-modal'>";
+    html += "<div class='modal-content'>";
+    html += "<h3>Confirm Delete</h3>";
+    html += "<p>Are you sure you want to delete the file:</p>";
+    html += "<p><strong id='file-to-delete'></strong>?</p>";
+    html += "<p>This action cannot be undone.</p>";
+    html += "<div class='modal-buttons'>";
+    html += "<form id='delete-form' method='get' action='/delete'>";
+    html += "<button type='submit' class='btn btn-delete'>Delete</button>";
+    html += "</form>";
+    html += "<button onclick='closeModal()' class='btn'>Cancel</button>";
+    html += "</div></div></div>";
+    
     html += "</body></html>";
     
     request->send(200, "text/html", html);
@@ -614,6 +832,45 @@ void setup_web_server() {
       request->send(400, "text/plain", "File parameter missing");
     }
   });
+  
+  // File deletion handler
+  server.on("/delete", HTTP_GET, [](AsyncWebServerRequest *request){
+    if(request->hasParam("file")) {
+      String filepath = request->getParam("file")->value();
+      
+      // Check if file exists
+      SdFile deleteFile;
+      if(deleteFile.open(filepath.c_str(), O_READ)) {
+        deleteFile.close();  // Close it before attempting to delete
+        
+        // Get file name from path
+        String filename = filepath;
+        int lastSlash = filepath.lastIndexOf('/');
+        if(lastSlash >= 0) {
+          filename = filepath.substring(lastSlash + 1);
+        }
+        
+        // Get directory path for redirect
+        String path = "/";
+        if(lastSlash >= 0) {
+          path = filepath.substring(0, lastSlash + 1);
+        }
+        
+        // Delete the file
+        if(sd.remove(filepath.c_str())) {
+          // Redirect to the directory view with success message
+          request->redirect("/getdata?dir=" + path + "&msg=File+" + filename + "+deleted+successfully");
+        } else {
+          // Redirect with error message
+          request->redirect("/getdata?dir=" + path + "&error=Failed+to+delete+" + filename);
+        }
+      } else {
+        request->send(404, "text/plain", "File not found");
+      }
+    } else {
+      request->send(400, "text/plain", "File parameter missing");
+    }
+  });
 
   // Setup ElegantOTA
   ElegantOTA.begin(&server);
@@ -637,7 +894,7 @@ String list_files(String path) {
   // Try to open the directory
   SdFile dir;
   if(!dir.open(path.c_str(), O_READ)) {
-    return "<p>Failed to open directory</p>";
+    return "<div style='text-align:center;padding:20px;background-color:#f8d7da;color:#721c24;border-radius:8px;'>Failed to open directory</div>";
   }
   
   // Add parent directory link if not in root
@@ -654,8 +911,15 @@ String list_files(String path) {
       parentPath = "/";
     }
     
-    output += "<li><a href='/getdata?dir=" + parentPath + "'>[Parent Directory]</a></li>";
+    output += "<li>";
+    output += "<div><a href='/getdata?dir=" + parentPath + "'><strong>[Parent Directory]</strong></a></div>";
+    output += "<div class='file-actions'></div>"; // Empty actions for parent dir
+    output += "</li>";
   }
+  
+  // Count of files and directories
+  int fileCount = 0;
+  int dirCount = 0;
   
   // Loop through files and directories
   SdFile entry;
@@ -666,12 +930,24 @@ String list_files(String path) {
     
     if(entry.isDir()) {
       // Directory entry
-      output += "<li><a href='/getdata?dir=" + path + name + "'>[DIR] " + name + "</a></li>";
+      dirCount++;
+      output += "<li>";
+      output += "<div><a href='/getdata?dir=" + path + name + "'><strong>[DIR] " + name + "</strong></a></div>";
+      output += "<div class='file-actions'></div>"; // Empty actions for directories
+      output += "</li>";
     } else {
-      // File entry with download link and size
-      // String size = get_file_size(entry.fileSize());
-      String size = "1mb";
-      output += "<li><a href='/download?file=" + path + name + "'>" + name + " (" + size + ")</a></li>";
+      // File entry with download link and delete button
+      fileCount++;
+      size_t fileSize = entry.fileSize();
+      String sizeStr = get_file_size(fileSize);
+      
+      output += "<li>";
+      output += "<div>" + name + " <span style='color:#666;font-size:0.9em;'>(" + sizeStr + ")</span></div>";
+      output += "<div class='file-actions'>";
+      output += "<a href='/download?file=" + path + name + "' class='btn btn-download'>Download</a>";
+      output += "<a href='javascript:void(0)' onclick='confirmDelete(\"" + path + name + "\")' class='btn btn-delete'>Delete</a>";
+      output += "</div>";
+      output += "</li>";
     }
     
     entry.close();
@@ -679,6 +955,17 @@ String list_files(String path) {
   
   dir.close();
   output += "</ul>";
+  
+  // Add summary of files and directories
+  if (fileCount == 0 && dirCount == 0) {
+    output = "<div style='text-align:center;padding:20px;background-color:#fff3cd;color:#856404;border-radius:8px;margin-bottom:20px;'>Directory is empty</div>" + output;
+  } else {
+    String summary = "<div style='text-align:center;margin-bottom:15px;'>";
+    summary += String(dirCount) + " " + (dirCount == 1 ? "directory" : "directories") + ", ";
+    summary += String(fileCount) + " " + (fileCount == 1 ? "file" : "files");
+    summary += "</div>";
+    output = summary + output;
+  }
   
   return output;
 }
@@ -689,10 +976,18 @@ String list_files(String path) {
  * @return Formatted size string (e.g. "1.2 MB")
  */
 String get_file_size(size_t bytes) {
-  if(bytes < 1024) return String(bytes) + " B";
-  else if(bytes < 1048576) return String(bytes / 1024.0, 1) + " KB";
-  else if(bytes < 1073741824) return String(bytes / 1048576.0, 1) + " MB";
-  else return String(bytes / 1073741824.0, 1) + " GB";
+  if(bytes < 1024) {
+    return String(bytes) + " B";
+  } else if(bytes < 1048576) { // 1MB
+    float kb = bytes / 1024.0;
+    return String(kb, 1) + " KB";
+  } else if(bytes < 1073741824) { // 1GB
+    float mb = bytes / 1048576.0;
+    return String(mb, 1) + " MB";
+  } else { 
+    float gb = bytes / 1073741824.0;
+    return String(gb, 1) + " GB";
+  }
 }
 
 #if ENABLE_MQTT
